@@ -211,6 +211,7 @@ func main() {
 					dialog.ShowError(err, game.window)
 					return
 				}
+				game.gameTreeContainer.ScrollToBottom()
 			}, game.window)
 		}),
 		fyne.NewMenuItem("Export SGF", func() {
@@ -574,6 +575,9 @@ func (g *Game) initializeBoard() {
 	g.player = rootNode.player
 	g.nodeMap = make(map[string]*GameTreeNode)
 	g.nodeMap[rootNode.id] = rootNode
+	if g.inScoringMode {
+		g.exitScoringMode()
+	}
 }
 
 func copyBoard(board [][]string) [][]string {
@@ -1689,4 +1693,8 @@ func (g *Game) handlePass() {
 	g.updateGameTreeUI()
 
 	g.redraw()
+
+	if g.inScoringMode {
+		g.exitScoringMode()
+	}
 }
