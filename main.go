@@ -168,46 +168,6 @@ func main() {
 		nodeMap: make(map[string]*GameTreeNode),
 	}
 
-	// Create input fields for board size
-	xEntry := widget.NewEntry()
-	xEntry.SetPlaceHolder("Enter board width")
-	yEntry := widget.NewEntry()
-	yEntry.SetPlaceHolder("Enter board height")
-
-	// Set default values
-	xEntry.SetText("19")
-	yEntry.SetText("19")
-	game.sizeX, _ = strconv.Atoi(xEntry.Text)
-	game.sizeY, _ = strconv.Atoi(yEntry.Text)
-
-	// Create 'Fresh Board' button
-	newGameButton := widget.NewButton("Fresh Board", func() {
-		x, errX := strconv.Atoi(xEntry.Text)
-		y, errY := strconv.Atoi(yEntry.Text)
-		if errX != nil || errY != nil || x < 1 || y < 1 || x > 52 || y > 52 {
-			dialog.ShowError(fmt.Errorf("invalid board size (must be between 1 and 52)"), game.window)
-			return
-		}
-		game.sizeX = x
-		game.sizeY = y
-		game.initializeBoard()
-		game.drawBoard()
-		game.updateGameTreeUI() // Refresh the game tree UI
-	})
-	newGameButton.Importance = widget.HighImportance
-
-	// Create 'Pass' button
-	passButton := widget.NewButton("Pass", func() {
-		game.handlePass()
-	})
-	passButton.Importance = widget.MediumImportance
-
-	// Create 'Score' button
-	scoringButton := widget.NewButton("Score", func() {
-		game.toggleScoringMode()
-	})
-	scoringButton.Importance = widget.MediumImportance
-
 	// Create scoring status label
 	game.scoringStatus = widget.NewLabel("Not in scoring mode.")
 
@@ -221,6 +181,9 @@ func main() {
 		game.gridContainer,
 		inputLayer,
 	)
+
+	game.sizeX = 19
+	game.sizeY = 19
 
 	// Initialize the board here
 	game.initializeBoard()
@@ -270,8 +233,70 @@ func main() {
 		}),
 	)
 
+	gameMenu := fyne.NewMenu("Game",
+		fyne.NewMenuItem("Fresh Board", func() {
+			// Define the input entries outside the dialog
+			widthEntry := widget.NewEntry()
+			widthEntry.SetPlaceHolder("(1-52)")
+			widthEntry.SetText(strconv.Itoa(game.sizeX))
+			heightEntry := widget.NewEntry()
+			heightEntry.SetPlaceHolder("(1-52)")
+			heightEntry.SetText(strconv.Itoa(game.sizeY))
+
+			// Create form items
+			formItems := []*widget.FormItem{
+				widget.NewFormItem("Width", widthEntry),
+				widget.NewFormItem("Height", heightEntry),
+			}
+
+			// Create a custom dialog to input board width and height
+			boardSizeDialog := dialog.NewForm(
+				"Fresh Board",
+				"OK",
+				"Cancel",
+				formItems,
+				func(ok bool) {
+					if !ok {
+						return
+					}
+					widthStr := widthEntry.Text
+					heightStr := heightEntry.Text
+					x, errX := strconv.Atoi(widthStr)
+					y, errY := strconv.Atoi(heightStr)
+					if errX != nil || errY != nil || x < 1 || y < 1 || x > 52 || y > 52 {
+						dialog.ShowError(fmt.Errorf("invalid board size (must be between 1 and 52)"), game.window)
+						return
+					}
+					game.sizeX = x
+					game.sizeY = y
+					game.initializeBoard()
+					game.drawBoard()
+					game.updateGameTreeUI() // Refresh the game tree UI
+				},
+				game.window,
+			)
+
+			// Optionally, handle dialog close if needed
+			boardSizeDialog.SetOnClosed(func() {
+				// You can perform additional actions here when the dialog is closed
+			})
+
+			// Show the dialog
+			boardSizeDialog.Show()
+		}),
+		fyne.NewMenuItem("Pass", func() {
+			game.handlePass()
+		}),
+		fyne.NewMenuItem("Toggle Scoring Mode", func() {
+			game.toggleScoringMode()
+		}),
+	)
+
 	// Create the main menu and set it to the window
-	mainMenu := fyne.NewMainMenu(fileMenu)
+	mainMenu := fyne.NewMainMenu(
+		fileMenu,
+		gameMenu,
+	)
 	w.SetMainMenu(mainMenu)
 
 	// Wrap the gameTreeContainer in a ResizingContainer
@@ -281,13 +306,6 @@ func main() {
 	// Layout for controls
 	controls := container.NewVSplit(
 		container.NewVBox(
-			widget.NewForm(
-				widget.NewFormItem("x:", xEntry),
-				widget.NewFormItem("y:", yEntry),
-			),
-			newGameButton,
-			passButton,
-			scoringButton,
 			game.scoringStatus,
 		),
 		gameTreeResizingContainer, // Use the ResizingContainer here
