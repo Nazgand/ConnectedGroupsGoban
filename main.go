@@ -549,6 +549,11 @@ func (g *Game) buildGameTreeUI(node *GameTreeNode) fyne.CanvasObject {
 
 	// Create a button for the node
 	nodeButton := widget.NewButton(nodeLabel, func() {
+		// Add the following lines to exit scoring mode if active
+		if g.inScoringMode {
+			g.exitScoringMode()
+		}
+
 		g.setCurrentNode(node)
 		g.redrawBoard()
 		g.updateGameTreeUI()
