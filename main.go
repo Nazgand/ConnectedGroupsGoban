@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
@@ -23,6 +25,7 @@ const (
 	black             = "X"
 	white             = "O"
 	gridLineThickness = 0.15
+	version           = "1"
 )
 
 var (
@@ -54,6 +57,7 @@ type Game struct {
 	territoryMap      [][]string
 	territoryLayer    *fyne.Container
 	scoringStatus     *widget.Label
+	commentEntry      *widget.Entry
 }
 
 type GameTreeNode struct {
@@ -65,6 +69,7 @@ type GameTreeNode struct {
 	id         string
 	koX        int
 	koY        int
+	Comment    string
 }
 
 type ResizingContainer struct {
@@ -161,7 +166,7 @@ func (r *resizingContainerRenderer) Destroy() {}
 
 func main() {
 	a := app.New()
-	w := a.NewWindow("Weiqi Game")
+	w := a.NewWindow("Connected Groups Goban Version " + version)
 	game := &Game{
 		player:  black,
 		window:  w,
@@ -170,6 +175,17 @@ func main() {
 
 	// Create scoring status label
 	game.scoringStatus = widget.NewLabel("Not in scoring mode.")
+
+	// Create comment entry with placeholder
+	game.commentEntry = widget.NewMultiLineEntry()
+	game.commentEntry.SetPlaceHolder("Current move comment")
+
+	// Attach a listener to update the current node's comment when the textbox changes
+	game.commentEntry.OnChanged = func(content string) {
+		if game.currentNode != nil {
+			game.currentNode.Comment = content
+		}
+	}
 
 	// Create board canvas and related containers
 	background := canvas.NewRectangle(gobanColor)
@@ -308,6 +324,7 @@ func main() {
 	controls := container.NewVSplit(
 		container.NewVBox(
 			game.scoringStatus,
+			game.commentEntry,
 		),
 		gameTreeResizingContainer, // Use the ResizingContainer here
 	)
@@ -324,6 +341,14 @@ func main() {
 	a.Run()
 }
 
+func (g *Game) updateCommentTextbox() {
+	if g.currentNode != nil && g.currentNode.Comment != "" {
+		g.commentEntry.SetText(g.currentNode.Comment)
+	} else {
+		g.commentEntry.SetText("") // Clears the textbox if there's no comment
+	}
+}
+
 func (g *Game) toggleScoringMode() {
 	if g.inScoringMode {
 		g.exitScoringMode()
@@ -336,7 +361,7 @@ func (g *Game) enterScoringMode() {
 	g.inScoringMode = true
 	g.initializeTerritoryMap()
 	g.assignTerritoryToEmptyRegions()
-	g.redraw()
+	g.redrawBoard()
 	g.calculateAndDisplayScore()
 	// Hide the hoverStone
 	if g.hoverStone != nil {
@@ -353,7 +378,7 @@ func (g *Game) exitScoringMode() {
 		g.territoryLayer = nil
 	}
 	// Re-draw the board
-	g.redraw()
+	g.redrawBoard()
 	// Reset any scoring status
 	g.scoringStatus.SetText("Not in scoring mode.")
 }
@@ -525,7 +550,7 @@ func (g *Game) buildGameTreeUI(node *GameTreeNode) fyne.CanvasObject {
 	// Create a button for the node
 	nodeButton := widget.NewButton(nodeLabel, func() {
 		g.setCurrentNode(node)
-		g.redraw()
+		g.redrawBoard()
 		g.updateGameTreeUI()
 	})
 
@@ -578,6 +603,8 @@ func (g *Game) initializeBoard() {
 	if g.inScoringMode {
 		g.exitScoringMode()
 	}
+
+	g.updateCommentTextbox()
 }
 
 func copyBoard(board [][]string) [][]string {
@@ -592,14 +619,15 @@ func copyBoard(board [][]string) [][]string {
 func (g *Game) setCurrentNode(node *GameTreeNode) {
 	g.currentNode = node
 	g.player = node.player
+	g.updateCommentTextbox()
 }
 
 func (g *Game) drawBoard() {
 	g.hoverStone = nil
-	g.redraw()
+	g.redrawBoard()
 }
 
-func (g *Game) redraw() {
+func (g *Game) redrawBoard() {
 	// Clear previous grid lines and stones
 	g.gridContainer.Objects = nil
 
@@ -771,7 +799,7 @@ func (i *inputLayer) Resize(size fyne.Size) {
 	i.BaseWidget.Resize(size)
 	i.Refresh()
 	// Trigger redraw on resize to update cell dimensions and redraw grid
-	i.game.redraw()
+	i.game.redrawBoard()
 }
 
 func (i *inputLayer) Tapped(ev *fyne.PointEvent) {
@@ -894,7 +922,7 @@ func (g *Game) handleMouseClick(ev *fyne.PointEvent) {
 	if g.inScoringMode {
 		g.toggleGroupStatus(x, y)
 		g.assignTerritoryToEmptyRegions()
-		g.redraw()
+		g.redrawBoard()
 		g.calculateAndDisplayScore()
 		return
 	}
@@ -935,7 +963,10 @@ func (g *Game) handleMouseClick(ev *fyne.PointEvent) {
 	// Refresh the game tree UI
 	g.updateGameTreeUI()
 
-	g.redraw()
+	// Update the comment textbox
+	g.updateCommentTextbox()
+
+	g.redrawBoard()
 }
 
 func (g *Game) isMoveLegal(x, y int, player string) bool {
@@ -1122,10 +1153,6 @@ func switchPlayer(player string) string {
 }
 
 func (g *Game) importFromSGF(sgfContent string) error {
-	sgfContent = strings.ReplaceAll(sgfContent, "\n", "")
-	sgfContent = strings.ReplaceAll(sgfContent, "\r", "")
-	sgfContent = strings.ReplaceAll(sgfContent, "\t", "")
-	sgfContent = strings.ReplaceAll(sgfContent, " ", "")
 	collection, err := parseSGF(sgfContent)
 	if err != nil {
 		return err
@@ -1224,33 +1251,68 @@ func (p *SGFParser) parseSequence() ([]*SGFNode, error) {
 	return nodes, nil
 }
 
+// Add the following method to the SGFParser struct
+func (p *SGFParser) skipWhitespace() {
+	for p.index < p.length && (p.sgfContent[p.index] == ' ' || p.sgfContent[p.index] == '\n' || p.sgfContent[p.index] == '\r' || p.sgfContent[p.index] == '\t') {
+		p.index++
+	}
+}
+
 func (p *SGFParser) parseNode() (*SGFNode, error) {
 	properties := make(map[string][]string)
 	p.index++ // Skip the ';'
-	for p.index < p.length && p.isUpperCaseLetter(p.sgfContent[p.index]) {
+
+	for {
+		p.skipWhitespace() // Skip any whitespace before the next property
+		if p.index >= p.length {
+			break
+		}
+		r, _, err := p.nextRune()
+		if err != nil {
+			return nil, err
+		}
+		if !p.isUpperCaseLetter(r) {
+			break // No more properties in this node
+		}
 		ident, values, err := p.parseProperty()
 		if err != nil {
 			return nil, err
 		}
 		properties[ident] = values
 	}
+
 	return &SGFNode{
 		properties: properties,
 	}, nil
 }
 
-func (p *SGFParser) isUpperCaseLetter(c byte) bool {
-	return c >= 'A' && c <= 'Z'
+// Update the isUpperCaseLetter method to accept runes
+func (p *SGFParser) isUpperCaseLetter(r rune) bool {
+	return unicode.IsUpper(r)
 }
 
 func (p *SGFParser) parseProperty() (string, []string, error) {
 	ident := ""
-	for p.index < p.length && p.isUpperCaseLetter(p.sgfContent[p.index]) {
-		ident += string(p.sgfContent[p.index])
-		p.index++
+	for p.index < p.length {
+		r, size, err := p.nextRune()
+		if err != nil {
+			return "", nil, err
+		}
+		if !unicode.IsUpper(r) {
+			break
+		}
+		ident += string(r)
+		p.index += size
 	}
 	var values []string
-	for p.index < p.length && p.sgfContent[p.index] == '[' {
+	for p.index < p.length {
+		r, _, err := p.nextRune()
+		if err != nil {
+			return "", nil, err
+		}
+		if r != '[' {
+			break
+		}
 		value, err := p.parsePropValue()
 		if err != nil {
 			return "", nil, err
@@ -1260,29 +1322,47 @@ func (p *SGFParser) parseProperty() (string, []string, error) {
 	return ident, values, nil
 }
 
+// Add this method to the SGFParser struct
+func (p *SGFParser) nextRune() (rune, int, error) {
+	if p.index >= p.length {
+		return 0, 0, io.EOF
+	}
+	r, size := utf8.DecodeRuneInString(p.sgfContent[p.index:])
+	if r == utf8.RuneError && size == 1 {
+		return 0, 0, fmt.Errorf("invalid UTF-8 encoding at index %d", p.index)
+	}
+	return r, size, nil
+}
+
 func (p *SGFParser) parsePropValue() (string, error) {
 	p.index++ // Skip '['
-	value := ""
-	for p.index < p.length && p.sgfContent[p.index] != ']' {
-		if p.sgfContent[p.index] == '\\' {
-			p.index++
-			if p.index < p.length {
-				value += string(p.sgfContent[p.index])
-				p.index++
-			} else {
+	var runes []rune
+	for p.index < p.length {
+		r, size, err := p.nextRune()
+		if err != nil {
+			return "", err
+		}
+		if r == ']' {
+			p.index += size // Skip ']'
+			break
+		}
+		if r == '\\' {
+			p.index += size // Skip '\\'
+			if p.index >= p.length {
 				return "", fmt.Errorf("unexpected end of content after '\\'")
 			}
+			escapedRune, escSize, err := p.nextRune()
+			if err != nil {
+				return "", err
+			}
+			runes = append(runes, escapedRune)
+			p.index += escSize // Skip escaped character
 		} else {
-			value += string(p.sgfContent[p.index])
-			p.index++
+			runes = append(runes, r)
+			p.index += size // Move to next rune
 		}
 	}
-	if p.index < p.length && p.sgfContent[p.index] == ']' {
-		p.index++
-	} else {
-		return "", fmt.Errorf("expected ']' at index %d", p.index)
-	}
-	return value, nil
+	return string(runes), nil
 }
 
 func (g *Game) initializeGameFromSGFTree(gameTree *SGFGameTree) error {
@@ -1346,6 +1426,17 @@ func (g *Game) initializeGameFromSGFTree(gameTree *SGFGameTree) error {
 		}
 	}
 
+	// Assign comment to root node if present
+	if commentProps, hasC := gameTree.sequence[0].properties["C"]; hasC && len(commentProps) > 0 {
+		g.rootNode.Comment = commentProps[0]
+	}
+
+	// Set the current node to the root node to ensure the comment is displayed
+	g.setCurrentNode(g.rootNode)
+
+	// Update the comment textbox to reflect the root node's comment
+	g.updateCommentTextbox()
+
 	// Start processing the main line
 	var lastNode *GameTreeNode
 	err := g.processMainLine(gameTree, g.rootNode, &lastNode)
@@ -1359,7 +1450,7 @@ func (g *Game) initializeGameFromSGFTree(gameTree *SGFGameTree) error {
 	}
 
 	// Redraw the board
-	g.redraw()
+	g.redrawBoard()
 	// Refresh the game tree UI
 	g.updateGameTreeUI()
 
@@ -1433,6 +1524,12 @@ func (g *Game) processMainLine(gameTree *SGFGameTree, parentNode *GameTreeNode, 
 			// No move; just carry over the player
 			newNode.player = switchPlayer(currentParent.player)
 		}
+
+		// Assign comment to the new node if present
+		if commentProps, hasC := nodeProperties["C"]; hasC && len(commentProps) > 0 {
+			newNode.Comment = commentProps[0]
+		}
+
 		currentParent = newNode
 		*lastNode = newNode // Update lastNode to the current node
 	}
@@ -1563,6 +1660,12 @@ func (g *Game) processSequence(sequence []*SGFNode, parentNode *GameTreeNode) er
 			// No move; just carry over the player
 			newNode.player = switchPlayer(currentParent.player)
 		}
+
+		// Assign comment to the new node if present
+		if commentProps, hasC := nodeProperties.properties["C"]; hasC && len(commentProps) > 0 {
+			newNode.Comment = commentProps[0]
+		}
+
 		currentParent = newNode
 	}
 	return nil
@@ -1593,10 +1696,10 @@ func generateSGF(node *GameTreeNode, sizeX, sizeY int) string {
 	if node.parent == nil {
 		// Root node properties
 		sgf += ";"
-		sgf += "FF[4]"                    // File format version
-		sgf += "GM[1]"                    // Game type (1 = Go)
-		sgf += "CA[UTF-8]"                // Unicode format
-		sgf += "AP[ConnectedGroupsGoban]" // Application name
+		sgf += "FF[4]"                                          // File format version
+		sgf += "GM[1]"                                          // Game type (1 = Go)
+		sgf += "CA[UTF-8]"                                      // Unicode format
+		sgf += "AP[ConnectedGroupsGobanVersion" + version + "]" // Application name
 
 		// Adjust the board size property for rectangular boards
 		if sizeX == sizeY {
@@ -1633,15 +1736,22 @@ func generateSGF(node *GameTreeNode, sizeX, sizeY int) string {
 			}
 		}
 
+		// Include comment if present
+		if node.Comment != "" {
+			// Escape ']' and '\' characters in comments
+			escapedComment := strings.ReplaceAll(node.Comment, "\\", "\\\\")
+			escapedComment = strings.ReplaceAll(escapedComment, "]", "\\]")
+			sgf += fmt.Sprintf("C[%s]", escapedComment)
+		}
 	} else {
 		// Add move
 		sgf += ";"
 		move := node.move
 		moveStr := ""
 		if node.parent.player == black {
-			moveStr += "W"
-		} else {
 			moveStr += "B"
+		} else {
+			moveStr += "W"
 		}
 		if move[0] >= 0 && move[1] >= 0 {
 			coords := convertCoordinatesToSGF(move[0], move[1])
@@ -1650,6 +1760,15 @@ func generateSGF(node *GameTreeNode, sizeX, sizeY int) string {
 			// Pass move
 			moveStr += "[]"
 		}
+
+		// Include comment if present
+		if node.Comment != "" {
+			// Escape ']' and '\' characters in comments
+			escapedComment := strings.ReplaceAll(node.Comment, "\\", "\\\\")
+			escapedComment = strings.ReplaceAll(escapedComment, "]", "\\]")
+			moveStr += fmt.Sprintf("C[%s]", escapedComment)
+		}
+
 		sgf += moveStr
 	}
 
@@ -1692,7 +1811,10 @@ func (g *Game) handlePass() {
 	// Refresh the game tree UI
 	g.updateGameTreeUI()
 
-	g.redraw()
+	// Update the comment textbox
+	g.updateCommentTextbox()
+
+	g.redrawBoard()
 
 	if g.inScoringMode {
 		g.exitScoringMode()
