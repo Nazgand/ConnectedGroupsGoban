@@ -22,8 +22,8 @@ import (
 
 const (
 	empty             = "."
-	black             = "X"
-	white             = "O"
+	black             = "B"
+	white             = "W"
 	gridLineThickness = 0.15
 	version           = "1"
 )
@@ -206,7 +206,7 @@ func main() {
 	game.drawBoard()
 
 	// Initialize the game tree
-	game.gameTreeContainer = container.NewVScroll(nil)
+	game.gameTreeContainer = container.NewScroll(nil)
 	game.updateGameTreeUI()
 
 	// Define the "File" menu
@@ -475,7 +475,7 @@ func (g *Game) calculateScore() (int, int) {
 
 func (g *Game) calculateAndDisplayScore() {
 	blackScore, whiteScore := g.calculateScore()
-	g.scoringStatus.SetText(fmt.Sprintf("Black: %d points, White: %d points.", blackScore, whiteScore))
+	g.scoringStatus.SetText(fmt.Sprintf("Black: %d, White: %d", blackScore, whiteScore))
 }
 
 func (g *Game) toggleGroupStatus(x, y int) {
@@ -498,7 +498,6 @@ func (g *Game) toggleGroupStatus(x, y int) {
 		visited[[2]int{cx, cy}] = true
 
 		stone := g.currentNode.boardState[cy][cx]
-		// territoryOwner := g.territoryMap[cy][cx]
 
 		if stone == originalOwner {
 			// Toggle the ownership
@@ -532,9 +531,11 @@ func (g *Game) toggleGroupStatus(x, y int) {
 }
 
 func (g *Game) updateGameTreeUI() {
+	scrollPosition := g.gameTreeContainer.Offset
 	newGameTreeUI := g.buildGameTreeUI(g.rootNode)
 	g.gameTreeContainer.Content = newGameTreeUI
 	g.gameTreeContainer.Refresh()
+	g.gameTreeContainer.Offset = scrollPosition
 }
 
 func (g *Game) buildGameTreeUI(node *GameTreeNode) fyne.CanvasObject {
@@ -542,9 +543,9 @@ func (g *Game) buildGameTreeUI(node *GameTreeNode) fyne.CanvasObject {
 	if node.parent == nil {
 		nodeLabel = "Root"
 	} else if node.move[0] == -1 && node.move[1] == -1 {
-		nodeLabel = fmt.Sprintf("%s: Pass", switchPlayer(node.player))
+		nodeLabel = fmt.Sprintf("%s:Pass", switchPlayer(node.player))
 	} else {
-		nodeLabel = fmt.Sprintf("%s: (%d, %d)", switchPlayer(node.player), node.move[0], node.move[1])
+		nodeLabel = fmt.Sprintf("%s:%d,%d", switchPlayer(node.player), node.move[0], node.move[1])
 	}
 
 	// Create a button for the node
@@ -565,19 +566,12 @@ func (g *Game) buildGameTreeUI(node *GameTreeNode) fyne.CanvasObject {
 	}
 
 	// Handle children nodes
-	if len(node.children) == 0 {
-		return nodeButton
-	} else if len(node.children) == 1 {
-		childUI := g.buildGameTreeUI(node.children[0])
-		return container.NewVBox(nodeButton, childUI)
-	} else {
-		childUIs := []fyne.CanvasObject{}
-		for _, child := range node.children {
-			childUIs = append(childUIs, g.buildGameTreeUI(child))
-		}
-		childrenContainer := container.NewHBox(childUIs...)
-		return container.NewVBox(nodeButton, childrenContainer)
+	childUIs := []fyne.CanvasObject{}
+	for _, child := range node.children {
+		childUIs = append(childUIs, g.buildGameTreeUI(child))
 	}
+	childrenContainer := container.NewHBox(childUIs...)
+	return container.NewVBox(nodeButton, childrenContainer)
 }
 
 func makeEmptyBoard(sizeX, sizeY int) [][]string {
