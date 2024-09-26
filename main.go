@@ -196,46 +196,6 @@ func main() {
 	})
 	newGameButton.Importance = widget.HighImportance
 
-	// Create 'Import SGF' button
-	importSGFButton := widget.NewButton("Import SGF", func() {
-		dialog.ShowFileOpen(func(reader fyne.URIReadCloser, err error) {
-			if err != nil || reader == nil {
-				return
-			}
-			defer reader.Close()
-			sgfContent, err := io.ReadAll(reader)
-			if err != nil {
-				dialog.ShowError(err, game.window)
-				return
-			}
-			err = game.importFromSGF(string(sgfContent))
-			if err != nil {
-				dialog.ShowError(err, game.window)
-				return
-			}
-		}, game.window)
-	})
-
-	// Create 'Export SGF' button
-	exportSGFButton := widget.NewButton("Export SGF", func() {
-		dialog.ShowFileSave(func(writer fyne.URIWriteCloser, err error) {
-			if err != nil || writer == nil {
-				return
-			}
-			defer writer.Close()
-			sgfContent, err := game.exportToSGF()
-			if err != nil {
-				dialog.ShowError(err, game.window)
-				return
-			}
-			_, err = writer.Write([]byte(sgfContent))
-			if err != nil {
-				dialog.ShowError(err, game.window)
-				return
-			}
-		}, game.window)
-	})
-
 	// Create 'Pass' button
 	passButton := widget.NewButton("Pass", func() {
 		game.handlePass()
@@ -270,6 +230,50 @@ func main() {
 	game.gameTreeContainer = container.NewVScroll(nil)
 	game.updateGameTreeUI()
 
+	// Define the "File" menu
+	fileMenu := fyne.NewMenu("File",
+		fyne.NewMenuItem("Import SGF", func() {
+			dialog.ShowFileOpen(func(reader fyne.URIReadCloser, err error) {
+				if err != nil || reader == nil {
+					return
+				}
+				defer reader.Close()
+				sgfContent, err := io.ReadAll(reader)
+				if err != nil {
+					dialog.ShowError(err, game.window)
+					return
+				}
+				err = game.importFromSGF(string(sgfContent))
+				if err != nil {
+					dialog.ShowError(err, game.window)
+					return
+				}
+			}, game.window)
+		}),
+		fyne.NewMenuItem("Export SGF", func() {
+			dialog.ShowFileSave(func(writer fyne.URIWriteCloser, err error) {
+				if err != nil || writer == nil {
+					return
+				}
+				defer writer.Close()
+				sgfContent, err := game.exportToSGF()
+				if err != nil {
+					dialog.ShowError(err, game.window)
+					return
+				}
+				_, err = writer.Write([]byte(sgfContent))
+				if err != nil {
+					dialog.ShowError(err, game.window)
+					return
+				}
+			}, game.window)
+		}),
+	)
+
+	// Create the main menu and set it to the window
+	mainMenu := fyne.NewMainMenu(fileMenu)
+	w.SetMainMenu(mainMenu)
+
 	// Wrap the gameTreeContainer in a ResizingContainer
 	resizingLabel := widget.NewLabel("Resizing")
 	gameTreeResizingContainer := NewResizingContainer(game.gameTreeContainer, resizingLabel)
@@ -282,8 +286,6 @@ func main() {
 				widget.NewFormItem("y:", yEntry),
 			),
 			newGameButton,
-			importSGFButton,
-			exportSGFButton,
 			passButton,
 			scoringButton,
 			game.scoringStatus,
