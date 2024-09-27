@@ -63,22 +63,22 @@ type Game struct {
 }
 
 type GameTreeNode struct {
-	boardState       [][]string
-	move             [2]int
-	player           string
-	children         []*GameTreeNode
-	parent           *GameTreeNode
-	id               string
-	koX              int
-	koY              int
-	Comment          string
-	addedBlackStones []string // New field for AB properties
-	addedWhiteStones []string // New field for AW properties
-	CR               []string
-	SQ               []string
-	TR               []string
-	MA               []string
-	LB               map[string]string
+	boardState       [][]string        // Current state of the board at this node
+	move             [2]int            // Coordinates of the move ([x, y]); (-1, -1) represents a pass
+	player           string            // Player who made the move ("B" for Black, "W" for White)
+	children         []*GameTreeNode   // Child nodes representing subsequent moves
+	parent           *GameTreeNode     // Parent node in the game tree
+	id               string            // Unique identifier for the node
+	koX              int               // X-coordinate for ko rule; -1 if not applicable
+	koY              int               // Y-coordinate for ko rule; -1 if not applicable
+	Comment          string            // Optional comment for the move
+	addedBlackStones []string          // Coordinates of additional Black stones (AB properties)
+	addedWhiteStones []string          // Coordinates of additional White stones (AW properties)
+	CR               []string          // Coordinates for circle annotations
+	SQ               []string          // Coordinates for square annotations
+	TR               []string          // Coordinates for triangle annotations
+	MA               []string          // Coordinates for mark (X) annotations
+	LB               map[string]string // Labels for specific points on the board
 }
 
 type ResizingContainer struct {
@@ -666,41 +666,63 @@ func (g *Game) drawBoard() {
 }
 
 func (g *Game) redrawBoard() {
-	// Clear previous grid lines and stones
+	// Clear previous grid lines, stones, and annotations
 	g.gridContainer.Objects = nil
-
-	// Hide gridContainer for optimized efficiency
 	g.gridContainer.Hide()
 
-	// If territoryLayer exists, remove it
+	// Remove existing territory layer if present
 	if g.territoryLayer != nil {
 		g.gridContainer.Remove(g.territoryLayer)
 	}
 
+	// Calculate cell size based on the current board size and window dimensions
 	size := g.boardCanvas.Size()
 	g.cellSize = min(size.Width/float32(g.sizeX), size.Height/float32(g.sizeY))
 
-	// Draw grid lines
+	// Draw various components of the board
+	g.drawGridLines()
+	g.drawStoneConnections()
+	g.drawStones()
+	g.drawAnnotations()
+
+	// Draw territory markers if in scoring mode
+	if g.inScoringMode {
+		g.drawTerritoryMarkers()
+	}
+
+	// Show and refresh the grid container to render all added objects
+	g.gridContainer.Show()
+	g.gridContainer.Refresh()
+}
+
+// Draws the grid lines on the board
+func (g *Game) drawGridLines() {
+	// Draw vertical lines
 	for x := 0; x < g.sizeX; x++ {
 		line := canvas.NewLine(lineColor)
-		pos := g.boardCoordsToPixel(x, 0)
-		line.Position1 = fyne.NewPos(pos.X+0.5*g.cellSize, pos.Y+(0.5-gridLineThickness/2)*g.cellSize)
-		pos = g.boardCoordsToPixel(x, g.sizeY-1)
-		line.Position2 = fyne.NewPos(pos.X+0.5*g.cellSize, pos.Y+(0.5+gridLineThickness/2)*g.cellSize)
-		line.StrokeWidth = g.cellSize * gridLineThickness
-		g.gridContainer.Add(line)
-	}
-	for y := 0; y < g.sizeY; y++ {
-		line := canvas.NewLine(lineColor)
-		pos := g.boardCoordsToPixel(0, y)
-		line.Position1 = fyne.NewPos(pos.X+(0.5-gridLineThickness/2)*g.cellSize, pos.Y+0.5*g.cellSize)
-		pos = g.boardCoordsToPixel(g.sizeX-1, y)
-		line.Position2 = fyne.NewPos(pos.X+(0.5+gridLineThickness/2)*g.cellSize, pos.Y+0.5*g.cellSize)
+		startPos := g.boardCoordsToPixel(x, 0)
+		endPos := g.boardCoordsToPixel(x, g.sizeY-1)
+		line.Position1 = fyne.NewPos(startPos.X+0.5*g.cellSize, startPos.Y+(0.5-gridLineThickness/2)*g.cellSize)
+		line.Position2 = fyne.NewPos(endPos.X+0.5*g.cellSize, endPos.Y+(0.5+gridLineThickness/2)*g.cellSize)
 		line.StrokeWidth = g.cellSize * gridLineThickness
 		g.gridContainer.Add(line)
 	}
 
-	// Draw 4-square stone connections
+	// Draw horizontal lines
+	for y := 0; y < g.sizeY; y++ {
+		line := canvas.NewLine(lineColor)
+		startPos := g.boardCoordsToPixel(0, y)
+		endPos := g.boardCoordsToPixel(g.sizeX-1, y)
+		line.Position1 = fyne.NewPos(startPos.X+(0.5-gridLineThickness/2)*g.cellSize, startPos.Y+0.5*g.cellSize)
+		line.Position2 = fyne.NewPos(endPos.X+(0.5+gridLineThickness/2)*g.cellSize, endPos.Y+0.5*g.cellSize)
+		line.StrokeWidth = g.cellSize * gridLineThickness
+		g.gridContainer.Add(line)
+	}
+}
+
+// Draws connections between stones to represent groups
+func (g *Game) drawStoneConnections() {
+	// Draw 4-square stone connections to represent groups
 	for y := 1; y < g.sizeY; y++ {
 		for x := 1; x < g.sizeX; x++ {
 			stone1 := g.currentNode.boardState[y][x-1]
@@ -708,7 +730,8 @@ func (g *Game) redrawBoard() {
 			stone3 := g.currentNode.boardState[y-1][x-1]
 			stone4 := g.currentNode.boardState[y-1][x]
 			if stone1 != empty && stone2 != empty && stone3 != empty && stone4 != empty {
-				if stone3 == stone2 && stone1 == stone4 && stone1 != stone2 { // Rule out cross cut
+				// Rule out cross cuts to prevent incorrect group representation
+				if stone3 == stone2 && stone1 == stone4 && stone1 != stone2 {
 					continue
 				}
 				rect := canvas.NewRectangle(blackColor)
@@ -764,8 +787,10 @@ func (g *Game) redrawBoard() {
 			}
 		}
 	}
+}
 
-	// Draw stones
+// Draws the stones on the board based on the current board state
+func (g *Game) drawStones() {
 	for y := 0; y < g.sizeY; y++ {
 		for x := 0; x < g.sizeX; x++ {
 			stone := g.currentNode.boardState[y][x]
@@ -782,8 +807,10 @@ func (g *Game) redrawBoard() {
 			}
 		}
 	}
+}
 
-	// Draw annotations (CR, SQ, TR, MA, LB)
+// Draws annotations such as circles, squares, triangles, marks, and labels
+func (g *Game) drawAnnotations() {
 	annotationsLayer := container.NewWithoutLayout()
 
 	// Helper function to calculate positions
@@ -843,7 +870,7 @@ func (g *Game) redrawBoard() {
 		pos1 := fyne.NewPos(pos.X+0.5*g.cellSize-tXOffset, pos.Y+0.5*g.cellSize+tYOffset)
 		pos2 := fyne.NewPos(pos.X+0.5*g.cellSize+tXOffset, pos.Y+0.5*g.cellSize+tYOffset)
 
-		// Adjust positions based on the board position
+		// Create triangle lines
 		line1 := canvas.NewLine(redColor)
 		line1.StrokeWidth = g.cellSize * 0.05
 		line1.Position1 = pos0
@@ -859,12 +886,13 @@ func (g *Game) redrawBoard() {
 		line3.Position1 = pos2
 		line3.Position2 = pos0
 
+		// Add lines to annotations layer
 		annotationsLayer.Add(line1)
 		annotationsLayer.Add(line2)
 		annotationsLayer.Add(line3)
 	}
 
-	// Draw Xs (MA) using two lines
+	// Draw Xs (MA) using two crossing lines
 	for _, coord := range g.currentNode.MA {
 		pos, ok := getPosition(coord)
 		if !ok {
@@ -883,6 +911,7 @@ func (g *Game) redrawBoard() {
 		line2.Position1 = fyne.NewPos(pos.X+0.5*g.cellSize+size/2, pos.Y+0.5*g.cellSize-size/2)
 		line2.Position2 = fyne.NewPos(pos.X+0.5*g.cellSize-size/2, pos.Y+0.5*g.cellSize+size/2)
 
+		// Add lines to annotations layer
 		annotationsLayer.Add(line1)
 		annotationsLayer.Add(line2)
 	}
@@ -897,8 +926,8 @@ func (g *Game) redrawBoard() {
 		text.TextSize = g.cellSize * 0.4
 		text.Alignment = fyne.TextAlignCenter
 		text.TextStyle = fyne.TextStyle{Bold: true}
-		// Calculate the size needed for the text
-		text.Resize(text.MinSize())
+		text.Resize(text.MinSize()) // Calculate the size needed for the text
+
 		// Center the text on the point
 		text.Move(fyne.Position{
 			X: pos.X + 0.5*g.cellSize - text.Size().Width/2,
@@ -909,38 +938,37 @@ func (g *Game) redrawBoard() {
 
 	// Add annotations layer to gridContainer
 	g.gridContainer.Add(annotationsLayer)
+}
 
-	// Draw territory markers if in scoring mode
-	if g.inScoringMode {
-		// Create new territoryLayer
-		g.territoryLayer = container.NewWithoutLayout()
-		// Draw territory markers
-		for y := 0; y < g.sizeY; y++ {
-			for x := 0; x < g.sizeX; x++ {
-				owner := g.territoryMap[y][x]
-				if owner == black || owner == white {
-					rect := canvas.NewRectangle(transparentBlackColor)
-					rect.StrokeColor = blackScoreColor
-					if owner == white {
-						rect.FillColor = transparentWhiteColor
-						rect.StrokeColor = whiteScoreColor
-					}
-					rect.StrokeWidth = g.cellSize * 0.039
-					squareSize := g.cellSize * 0.51
-					pos := g.boardCoordsToPixel(x, y)
-					pos = fyne.Position{X: pos.X + 0.5*g.cellSize - squareSize/2, Y: pos.Y + 0.5*g.cellSize - squareSize/2}
-					rect.Resize(fyne.NewSize(squareSize, squareSize))
-					rect.Move(pos)
-					g.territoryLayer.Add(rect)
+// Draws territory markers when in scoring mode
+func (g *Game) drawTerritoryMarkers() {
+	// Create a new layer for territory markers
+	g.territoryLayer = container.NewWithoutLayout()
+
+	// Iterate over the territory map to place markers
+	for y := 0; y < g.sizeY; y++ {
+		for x := 0; x < g.sizeX; x++ {
+			owner := g.territoryMap[y][x]
+			if owner == black || owner == white {
+				rect := canvas.NewRectangle(transparentBlackColor)
+				rect.StrokeColor = blackScoreColor
+				if owner == white {
+					rect.FillColor = transparentWhiteColor
+					rect.StrokeColor = whiteScoreColor
 				}
+				rect.StrokeWidth = g.cellSize * 0.039
+				squareSize := g.cellSize * 0.51
+				pos := g.boardCoordsToPixel(x, y)
+				pos = fyne.Position{X: pos.X + 0.5*g.cellSize - squareSize/2, Y: pos.Y + 0.5*g.cellSize - squareSize/2}
+				rect.Resize(fyne.NewSize(squareSize, squareSize))
+				rect.Move(pos)
+				g.territoryLayer.Add(rect)
 			}
 		}
-		// Add the territoryLayer to gridContainer
-		g.gridContainer.Add(g.territoryLayer)
 	}
 
-	g.gridContainer.Show()
-	g.gridContainer.Refresh()
+	// Add the territoryLayer to gridContainer
+	g.gridContainer.Add(g.territoryLayer)
 }
 
 type inputLayer struct {
@@ -1011,18 +1039,21 @@ func (r *inputLayerRenderer) Objects() []fyne.CanvasObject {
 
 func (r *inputLayerRenderer) Destroy() {}
 
+// Converts pixel coordinates to board coordinates.
+// Returns x, y indices and a boolean indicating validity.
 func (g *Game) pixelToBoardCoords(pos fyne.Position) (int, int, bool) {
 	size := g.boardCanvas.Size()
 	x := int(((pos.X*2-size.Width)/g.cellSize + float32(g.sizeX)) / 2)
 	y := int(((pos.Y*2-size.Height)/g.cellSize + float32(g.sizeY)) / 2)
 
 	if x < 0 || x >= g.sizeX || y < 0 || y >= g.sizeY {
-		return 0, 0, false
+		return 93, 93, false // Coordinates out of bounds
 	}
 
 	return x, y, true
 }
 
+// Converts board coordinates to pixel positions for rendering.
 func (g *Game) boardCoordsToPixel(x, y int) fyne.Position {
 	size := g.boardCanvas.Size()
 	return fyne.NewPos(
@@ -1031,7 +1062,9 @@ func (g *Game) boardCoordsToPixel(x, y int) fyne.Position {
 	)
 }
 
+// Handles mouse movement events to display a hover stone when applicable.
 func (g *Game) handleMouseMove(ev *desktop.MouseEvent) {
+	// If in scoring mode, do not display hover stone
 	if g.inScoringMode {
 		if g.hoverStone != nil {
 			g.gridContainer.Remove(g.hoverStone)
@@ -1041,8 +1074,10 @@ func (g *Game) handleMouseMove(ev *desktop.MouseEvent) {
 		return
 	}
 
+	// Convert pixel position to board coordinates
 	x, y, ok := g.pixelToBoardCoords(ev.Position)
 	if !ok {
+		// Remove hover stone if out of bounds
 		if g.hoverStone != nil {
 			g.gridContainer.Remove(g.hoverStone)
 			g.hoverStone = nil
@@ -1051,7 +1086,9 @@ func (g *Game) handleMouseMove(ev *desktop.MouseEvent) {
 		return
 	}
 
+	// Check if the position is empty and the move is legal
 	if g.currentNode.boardState[y][x] != empty || !g.isMoveLegal(x, y, g.player) {
+		// Remove hover stone if the position is not suitable
 		if g.hoverStone != nil {
 			g.gridContainer.Remove(g.hoverStone)
 			g.hoverStone = nil
@@ -1060,12 +1097,12 @@ func (g *Game) handleMouseMove(ev *desktop.MouseEvent) {
 		return
 	}
 
-	// Remove previous hover stone
+	// Remove previous hover stone if it exists
 	if g.hoverStone != nil {
 		g.gridContainer.Remove(g.hoverStone)
 	}
 
-	// Add new hover stone
+	// Create a new hover stone with transparency to indicate potential placement
 	circle := canvas.NewCircle(transparentBlackColor)
 	if g.player == white {
 		circle.FillColor = transparentWhiteColor
@@ -1078,13 +1115,16 @@ func (g *Game) handleMouseMove(ev *desktop.MouseEvent) {
 	g.gridContainer.Refresh()
 }
 
+// Handles mouse click events to place stones or toggle group status in scoring mode.
 func (g *Game) handleMouseClick(ev *fyne.PointEvent) {
+	// Convert pixel position to board coordinates
 	x, y, ok := g.pixelToBoardCoords(ev.Position)
 	if !ok {
-		return
+		return // Click outside the board
 	}
 
 	if g.inScoringMode {
+		// In scoring mode, toggle the ownership of the group at (x, y)
 		g.toggleGroupStatus(x, y)
 		g.assignTerritoryToEmptyRegions()
 		g.redrawBoard()
@@ -1092,30 +1132,31 @@ func (g *Game) handleMouseClick(ev *fyne.PointEvent) {
 		return
 	}
 
+	// If the position is not empty, ignore the click
 	if g.currentNode.boardState[y][x] != empty {
 		return
 	}
 
+	// Check if the move is legal
 	if !g.isMoveLegal(x, y, g.player) {
 		return
 	}
 
-	// Check if the current node has added stones
+	// Prevent moves immediately after adding stones (e.g., setup positions)
 	if len(g.currentNode.addedBlackStones) > 0 || len(g.currentNode.addedWhiteStones) > 0 {
-		// Do not allow moves immediately after adding stones
 		return
 	}
 
-	// Copy the current board state
+	// Create a copy of the current board state to apply the move
 	boardCopy := copyBoard(g.currentNode.boardState)
 
-	// Place stone
+	// Place the stone on the copied board
 	boardCopy[y][x] = g.player
 
-	// Capture any opponent stones, possibly updating koX and koY
+	// Capture any opponent stones and handle ko rules
 	koX, koY := g.captureStones(boardCopy, x, y, g.player)
 
-	// Create new game tree node
+	// Create a new game tree node with the updated board state
 	g.idCounter++
 	newNode := &GameTreeNode{
 		boardState: boardCopy,
@@ -1131,12 +1172,13 @@ func (g *Game) handleMouseClick(ev *fyne.PointEvent) {
 	g.currentNode = newNode
 	g.player = newNode.player
 
-	// Refresh the game tree UI
+	// Refresh the game tree UI to reflect the new move
 	g.updateGameTreeUI()
 
-	// Update the comment textbox
+	// Update the comment textbox to show comments for the current node
 	g.updateCommentTextbox()
 
+	// Redraw the board to display the new stone and any captures
 	g.redrawBoard()
 }
 
@@ -1167,37 +1209,41 @@ func (g *Game) isMoveLegal(x, y int, player string) bool {
 	return false
 }
 
+// Determines if the stone at (x, y) has any liberties.
+// Utilizes depth-first search to check for empty adjacent positions.
 func hasLiberty(board [][]string, x, y int, player string, sizeX, sizeY int) bool {
-	visited := make(map[[2]int]bool)
+	visited := make(map[[2]int]bool) // Tracks visited positions to prevent infinite loops
 	return dfs(board, x, y, player, visited, sizeX, sizeY)
 }
 
+// Recursive DFS to check for liberties
 func dfs(board [][]string, x, y int, player string, visited map[[2]int]bool, sizeX, sizeY int) bool {
 	if x < 0 || x >= sizeX || y < 0 || y >= sizeY {
-		return false
+		return false // Out of bounds
 	}
 
 	if visited[[2]int{x, y}] {
-		return false
+		return false // Already visited
 	}
 
 	if board[y][x] == empty {
-		return true
+		return true // Found a liberty
 	}
 
 	if board[y][x] != player {
-		return false
+		return false // Encountered opponent's stone
 	}
 
-	visited[[2]int{x, y}] = true
+	visited[[2]int{x, y}] = true // Mark the current stone as visited
 
+	// Explore all four adjacent directions
 	dirs := [][2]int{{0, -1}, {0, 1}, {-1, 0}, {1, 0}}
 	for _, d := range dirs {
 		if dfs(board, x+d[0], y+d[1], player, visited, sizeX, sizeY) {
-			return true
+			return true // Found a liberty in adjacent stones
 		}
 	}
-	return false
+	return false // No liberties found in this group
 }
 
 func (g *Game) captureStones(board [][]string, x, y int, player string) (int, int) {
@@ -1316,6 +1362,8 @@ func (g *Game) getCapturedStones(board [][]string, x, y int, opponent string) []
 	return captured
 }
 
+// Switches the current player.
+// Returns "W" if the current player is "B", and vice versa.
 func switchPlayer(player string) string {
 	if player == black {
 		return white
@@ -1341,18 +1389,18 @@ func (g *Game) exportToSGF() (string, error) {
 }
 
 type SGFParser struct {
-	sgfContent string
-	index      int
-	length     int
+	sgfContent string // The SGF content to parse
+	index      int    // Current parsing index
+	length     int    // Length of the SGF content
 }
 
 type SGFGameTree struct {
-	sequence []*SGFNode
-	subtrees []*SGFGameTree
+	sequence []*SGFNode     // Sequence of nodes representing moves and properties
+	subtrees []*SGFGameTree // Subtrees representing variations
 }
 
 type SGFNode struct {
-	properties map[string][]string
+	properties map[string][]string // Properties of the node (e.g., move, annotations)
 }
 
 func parseSGF(sgfContent string) ([]*SGFGameTree, error) {
@@ -1362,11 +1410,12 @@ func parseSGF(sgfContent string) ([]*SGFGameTree, error) {
 		length:     len(sgfContent),
 	}
 
-	// Validate SGF before parsing
+	// Validate the SGF content for balanced parentheses
 	if err := parser.validateSGF(); err != nil {
 		return nil, err
 	}
 
+	// Parse the SGF content into a collection of game trees
 	collection, err := parser.parseCollection()
 	if err != nil {
 		return nil, fmt.Errorf("error parsing SGF at index %d: %v", parser.index, err)
@@ -1374,6 +1423,7 @@ func parseSGF(sgfContent string) ([]*SGFGameTree, error) {
 	return collection, nil
 }
 
+// Validates that all parentheses in the SGF content are balanced
 func (p *SGFParser) validateSGF() error {
 	openParens := 0
 	for i, char := range p.sgfContent {
@@ -1393,24 +1443,26 @@ func (p *SGFParser) validateSGF() error {
 	return nil
 }
 
+// Parses the entire collection of game trees in the SGF content
 func (p *SGFParser) parseCollection() ([]*SGFGameTree, error) {
 	var collection []*SGFGameTree
 	for p.index < p.length {
 		p.skipWhitespace() // Skip any whitespace before checking for '('
 		if p.index < p.length && p.sgfContent[p.index] == '(' {
-			p.index++
+			p.index++ // Consume '('
 			gameTree, err := p.parseGameTree()
 			if err != nil {
 				return nil, err
 			}
 			collection = append(collection, gameTree)
 		} else {
-			p.index++
+			p.index++ // Move to the next character
 		}
 	}
 	return collection, nil
 }
 
+// Parses a single game tree, including its sequence and any subtrees (variations)
 func (p *SGFParser) parseGameTree() (*SGFGameTree, error) {
 	sequence, err := p.parseSequence()
 	if err != nil {
@@ -1421,14 +1473,14 @@ func (p *SGFParser) parseGameTree() (*SGFGameTree, error) {
 	for {
 		p.skipWhitespace() // Skip any whitespace before checking for '('
 		if p.index < p.length && p.sgfContent[p.index] == '(' {
-			p.index++ // Skip '(' before parsing subtree
+			p.index++ // Consume '(' before parsing subtree
 			subtree, err := p.parseGameTree()
 			if err != nil {
 				return nil, err
 			}
 			subtrees = append(subtrees, subtree)
 		} else {
-			break
+			break // No more subtrees
 		}
 	}
 
@@ -1438,8 +1490,6 @@ func (p *SGFParser) parseGameTree() (*SGFGameTree, error) {
 		if p.sgfContent[p.index] == ')' {
 			p.index++ // Consume ')'
 		} else {
-			// If the current character is not ')', but we've skipped whitespace,
-			// it's an unexpected character (e.g., newline)
 			return nil, fmt.Errorf("expected ')' at index %d, found '%c'", p.index, p.sgfContent[p.index])
 		}
 	} else {
@@ -1451,6 +1501,7 @@ func (p *SGFParser) parseGameTree() (*SGFGameTree, error) {
 	}, nil
 }
 
+// Parses a sequence of nodes within a game tree
 func (p *SGFParser) parseSequence() ([]*SGFNode, error) {
 	var nodes []*SGFNode
 	for p.index < p.length && p.sgfContent[p.index] == ';' {
@@ -1463,13 +1514,14 @@ func (p *SGFParser) parseSequence() ([]*SGFNode, error) {
 	return nodes, nil
 }
 
-// Add the following method to the SGFParser struct
+// Skips whitespace characters in the SGF content
 func (p *SGFParser) skipWhitespace() {
 	for p.index < p.length && (p.sgfContent[p.index] == ' ' || p.sgfContent[p.index] == '\n' || p.sgfContent[p.index] == '\r' || p.sgfContent[p.index] == '\t') {
 		p.index++
 	}
 }
 
+// Parses a single node, extracting its properties
 func (p *SGFParser) parseNode() (*SGFNode, error) {
 	properties := make(map[string][]string)
 	p.index++ // Skip the ';'
@@ -1477,7 +1529,7 @@ func (p *SGFParser) parseNode() (*SGFNode, error) {
 	for {
 		p.skipWhitespace() // Skip any whitespace before the next property
 		if p.index >= p.length {
-			break
+			break // End of content
 		}
 		r, _, err := p.nextRune()
 		if err != nil {
@@ -1498,11 +1550,12 @@ func (p *SGFParser) parseNode() (*SGFNode, error) {
 	}, nil
 }
 
-// Update the isUpperCaseLetter method to accept runes
+// Checks if a rune is an uppercase letter
 func (p *SGFParser) isUpperCaseLetter(r rune) bool {
 	return unicode.IsUpper(r)
 }
 
+// Parses a property, returning its identifier and associated values
 func (p *SGFParser) parseProperty() (string, []string, error) {
 	ident := ""
 	for p.index < p.length {
@@ -1511,7 +1564,7 @@ func (p *SGFParser) parseProperty() (string, []string, error) {
 			return "", nil, err
 		}
 		if !unicode.IsUpper(r) {
-			break
+			break // End of property identifier
 		}
 		ident += string(r)
 		p.index += size
@@ -1523,7 +1576,7 @@ func (p *SGFParser) parseProperty() (string, []string, error) {
 			return "", nil, err
 		}
 		if r != '[' {
-			break
+			break // No more values for this property
 		}
 		value, err := p.parsePropValue()
 		if err != nil {
@@ -1534,7 +1587,7 @@ func (p *SGFParser) parseProperty() (string, []string, error) {
 	return ident, values, nil
 }
 
-// Add this method to the SGFParser struct
+// Retrieves the next rune from the SGF content without advancing the index
 func (p *SGFParser) nextRune() (rune, int, error) {
 	if p.index >= p.length {
 		return 0, 0, io.EOF
@@ -1546,6 +1599,7 @@ func (p *SGFParser) nextRune() (rune, int, error) {
 	return r, size, nil
 }
 
+// Parses the value of a property, handling escaped characters
 func (p *SGFParser) parsePropValue() (string, error) {
 	p.index++ // Skip '['
 	var runes []rune
@@ -1556,7 +1610,7 @@ func (p *SGFParser) parsePropValue() (string, error) {
 		}
 		if r == ']' {
 			p.index += size // Skip ']'
-			break
+			break           // End of property value
 		}
 		if r == '\\' {
 			p.index += size // Skip '\\'
@@ -1717,20 +1771,21 @@ func charToInt(c rune) (int, error) {
 	}
 }
 
+// Converts SGF coordinates (e.g., "pd") to board x, y indices.
+// Returns a slice with [x, y] or nil if invalid.
 func convertSGFCoordToXY(coord string) []int {
 	if len(coord) != 2 {
-		return nil
+		return nil // Invalid coordinate length
 	}
 	x, err1 := charToInt(rune(coord[0]))
 	y, err2 := charToInt(rune(coord[1]))
 	if err1 != nil || err2 != nil {
-		return nil
+		return nil // Invalid characters in coordinate
 	}
 	if x >= 0 && x < 52 && y >= 0 && y < 52 {
-		return []int{x, y}
-	} else {
-		return nil
+		return []int{x, y} // Valid coordinate
 	}
+	return nil // Coordinate out of range
 }
 
 func (g *Game) processMainLine(gameTree *SGFGameTree, parentNode *GameTreeNode, lastNode **GameTreeNode) error {
@@ -1827,21 +1882,21 @@ func (g *Game) processMainLine(gameTree *SGFGameTree, parentNode *GameTreeNode, 
 }
 
 type MoveData struct {
-	move             *Move
-	pass             bool
-	addedBlackStones []string          // field for AB properties
-	addedWhiteStones []string          // field for AW properties
-	CR               []string          // field for CR properties
-	SQ               []string          // field for SQ properties
-	TR               []string          // field for TR properties
-	MA               []string          // field for MA properties
-	LB               map[string]string // field for LB properties
+	move             *Move             // The actual move made by a player
+	pass             bool              // Indicates if the move is a pass
+	addedBlackStones []string          // Coordinates for additional Black stones (AB)
+	addedWhiteStones []string          // Coordinates for additional White stones (AW)
+	CR               []string          // Circle annotations
+	SQ               []string          // Square annotations
+	TR               []string          // Triangle annotations
+	MA               []string          // Mark (X) annotations
+	LB               map[string]string // Labels for specific points
 }
 
 type Move struct {
-	x      int
-	y      int
-	player string
+	x      int    // X-coordinate of the move
+	y      int    // Y-coordinate of the move
+	player string // Player who made the move ("B" or "W")
 }
 
 func extractMoveFromNode(nodeProperties map[string][]string) (*MoveData, error) {
@@ -2079,6 +2134,7 @@ func intToChar(n int) (string, error) {
 	}
 }
 
+// Converts board x, y indices to SGF coordinates.
 func convertCoordinatesToSGF(x, y int) string {
 	sgfX, _ := intToChar(x)
 	sgfY, _ := intToChar(y)
@@ -2230,15 +2286,16 @@ func generateSGF(node *GameTreeNode, sizeX, sizeY int) string {
 		}
 	}
 
+	// Recursively generate SGF for child nodes (variations)
 	if len(node.children) > 0 {
 		if len(node.children) == 1 {
 			// Continue the main line without starting a new variation
 			childSGF := generateSGF(node.children[0], sizeX, sizeY)
-			// Remove outer parentheses
+			// Remove outer parentheses to nest within the current variation
 			childSGF = childSGF[1 : len(childSGF)-1]
 			sgf += childSGF
 		} else {
-			// Multiple variations
+			// Multiple variations; each variation is enclosed in parentheses
 			for _, child := range node.children {
 				sgf += generateSGF(child, sizeX, sizeY)
 			}
