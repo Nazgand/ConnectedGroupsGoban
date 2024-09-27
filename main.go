@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"image/color"
 	"io"
+	"math"
 	"strconv"
 	"strings"
 	"sync"
@@ -37,6 +38,7 @@ var (
 	whiteScoreColor       = color.RGBA{0, 255, 0, 255}
 	transparentWhiteColor = color.NRGBA{255, 255, 255, 128}
 	transparentBlackColor = color.NRGBA{0, 0, 0, 128}
+	redColor              = color.RGBA{255, 0, 0, 255}
 )
 
 type Game struct {
@@ -72,6 +74,11 @@ type GameTreeNode struct {
 	Comment          string
 	addedBlackStones []string // New field for AB properties
 	addedWhiteStones []string // New field for AW properties
+	CR               []string
+	SQ               []string
+	TR               []string
+	MA               []string
+	LB               map[string]string
 }
 
 type ResizingContainer struct {
@@ -624,6 +631,7 @@ func (g *Game) initializeBoard() {
 		id:         fmt.Sprintf("%d", g.idCounter),
 		koX:        -1,
 		koY:        -1,
+		LB:         make(map[string]string),
 	}
 	g.rootNode = rootNode
 	g.currentNode = rootNode
@@ -774,6 +782,133 @@ func (g *Game) redrawBoard() {
 			}
 		}
 	}
+
+	// Draw annotations (CR, SQ, TR, MA, LB)
+	annotationsLayer := container.NewWithoutLayout()
+
+	// Helper function to calculate positions
+	getPosition := func(coord string) (fyne.Position, bool) {
+		xy := convertSGFCoordToXY(coord)
+		if xy == nil {
+			return fyne.Position{}, false
+		}
+		pos := g.boardCoordsToPixel(xy[0], xy[1])
+		return pos, true
+	}
+
+	// Draw Circles (CR)
+	for _, coord := range g.currentNode.CR {
+		pos, ok := getPosition(coord)
+		if !ok {
+			continue
+		}
+		circle := canvas.NewCircle(color.Transparent)
+		circle.StrokeColor = redColor
+		circle.StrokeWidth = g.cellSize * 0.05
+		circle.Resize(fyne.NewSize(g.cellSize*0.6, g.cellSize*0.6))
+		circle.Move(fyne.Position{
+			X: pos.X + 0.5*g.cellSize - circle.Size().Width/2,
+			Y: pos.Y + 0.5*g.cellSize - circle.Size().Height/2,
+		})
+		annotationsLayer.Add(circle)
+	}
+
+	// Draw Squares (SQ)
+	for _, coord := range g.currentNode.SQ {
+		pos, ok := getPosition(coord)
+		if !ok {
+			continue
+		}
+		square := canvas.NewRectangle(color.Transparent)
+		square.StrokeColor = redColor
+		square.StrokeWidth = g.cellSize * 0.05
+		square.Resize(fyne.NewSize(g.cellSize*0.6, g.cellSize*0.6))
+		square.Move(fyne.Position{
+			X: pos.X + 0.5*g.cellSize - square.Size().Width/2,
+			Y: pos.Y + 0.5*g.cellSize - square.Size().Height/2,
+		})
+		annotationsLayer.Add(square)
+	}
+
+	// Draw Triangles (TR) using three lines
+	tSize := g.cellSize * 0.39
+	tXOffset := tSize * float32(math.Sin(math.Pi/3))
+	tYOffset := tSize * float32(math.Cos(math.Pi/3))
+	for _, coord := range g.currentNode.TR {
+		pos, ok := getPosition(coord)
+		if !ok {
+			continue
+		}
+		pos0 := fyne.NewPos(pos.X+0.5*g.cellSize, pos.Y+0.5*g.cellSize-tSize)
+		pos1 := fyne.NewPos(pos.X+0.5*g.cellSize-tXOffset, pos.Y+0.5*g.cellSize+tYOffset)
+		pos2 := fyne.NewPos(pos.X+0.5*g.cellSize+tXOffset, pos.Y+0.5*g.cellSize+tYOffset)
+
+		// Adjust positions based on the board position
+		line1 := canvas.NewLine(redColor)
+		line1.StrokeWidth = g.cellSize * 0.05
+		line1.Position1 = pos0
+		line1.Position2 = pos1
+
+		line2 := canvas.NewLine(redColor)
+		line2.StrokeWidth = g.cellSize * 0.05
+		line2.Position1 = pos1
+		line2.Position2 = pos2
+
+		line3 := canvas.NewLine(redColor)
+		line3.StrokeWidth = g.cellSize * 0.05
+		line3.Position1 = pos2
+		line3.Position2 = pos0
+
+		annotationsLayer.Add(line1)
+		annotationsLayer.Add(line2)
+		annotationsLayer.Add(line3)
+	}
+
+	// Draw Xs (MA) using two lines
+	for _, coord := range g.currentNode.MA {
+		pos, ok := getPosition(coord)
+		if !ok {
+			continue
+		}
+		size := g.cellSize * 0.6
+
+		// Define the two crossing lines relative to the position
+		line1 := canvas.NewLine(redColor)
+		line1.StrokeWidth = g.cellSize * 0.05
+		line1.Position1 = fyne.NewPos(pos.X+0.5*g.cellSize-size/2, pos.Y+0.5*g.cellSize-size/2)
+		line1.Position2 = fyne.NewPos(pos.X+0.5*g.cellSize+size/2, pos.Y+0.5*g.cellSize+size/2)
+
+		line2 := canvas.NewLine(redColor)
+		line2.StrokeWidth = g.cellSize * 0.05
+		line2.Position1 = fyne.NewPos(pos.X+0.5*g.cellSize+size/2, pos.Y+0.5*g.cellSize-size/2)
+		line2.Position2 = fyne.NewPos(pos.X+0.5*g.cellSize-size/2, pos.Y+0.5*g.cellSize+size/2)
+
+		annotationsLayer.Add(line1)
+		annotationsLayer.Add(line2)
+	}
+
+	// Draw Labels (LB)
+	for coord, label := range g.currentNode.LB {
+		pos, ok := getPosition(coord)
+		if !ok {
+			continue
+		}
+		text := canvas.NewText(label, redColor)
+		text.TextSize = g.cellSize * 0.4
+		text.Alignment = fyne.TextAlignCenter
+		text.TextStyle = fyne.TextStyle{Bold: true}
+		// Calculate the size needed for the text
+		text.Resize(text.MinSize())
+		// Center the text on the point
+		text.Move(fyne.Position{
+			X: pos.X + 0.5*g.cellSize - text.Size().Width/2,
+			Y: pos.Y + 0.5*g.cellSize - text.Size().Height/2,
+		})
+		annotationsLayer.Add(text)
+	}
+
+	// Add annotations layer to gridContainer
+	g.gridContainer.Add(annotationsLayer)
 
 	// Draw territory markers if in scoring mode
 	if g.inScoringMode {
@@ -1226,6 +1361,12 @@ func parseSGF(sgfContent string) ([]*SGFGameTree, error) {
 		index:      0,
 		length:     len(sgfContent),
 	}
+
+	// Validate SGF before parsing
+	if err := parser.validateSGF(); err != nil {
+		return nil, err
+	}
+
 	collection, err := parser.parseCollection()
 	if err != nil {
 		return nil, fmt.Errorf("error parsing SGF at index %d: %v", parser.index, err)
@@ -1233,10 +1374,30 @@ func parseSGF(sgfContent string) ([]*SGFGameTree, error) {
 	return collection, nil
 }
 
+func (p *SGFParser) validateSGF() error {
+	openParens := 0
+	for i, char := range p.sgfContent {
+		if char == '(' {
+			openParens++
+		} else if char == ')' {
+			openParens--
+			if openParens < 0 {
+				return fmt.Errorf("unmatched ')' at index %d", i)
+			}
+		}
+	}
+	if openParens != 0 {
+		return fmt.Errorf("unmatched '(' in SGF content")
+	}
+	fmt.Println("SGF validated at the level of parenthesis.")
+	return nil
+}
+
 func (p *SGFParser) parseCollection() ([]*SGFGameTree, error) {
 	var collection []*SGFGameTree
 	for p.index < p.length {
-		if p.sgfContent[p.index] == '(' {
+		p.skipWhitespace() // Skip any whitespace before checking for '('
+		if p.index < p.length && p.sgfContent[p.index] == '(' {
 			p.index++
 			gameTree, err := p.parseGameTree()
 			if err != nil {
@@ -1256,18 +1417,33 @@ func (p *SGFParser) parseGameTree() (*SGFGameTree, error) {
 		return nil, err
 	}
 	var subtrees []*SGFGameTree
-	for p.index < p.length && p.sgfContent[p.index] == '(' {
-		p.index++
-		subtree, err := p.parseGameTree()
-		if err != nil {
-			return nil, err
+
+	for {
+		p.skipWhitespace() // Skip any whitespace before checking for '('
+		if p.index < p.length && p.sgfContent[p.index] == '(' {
+			p.index++ // Skip '(' before parsing subtree
+			subtree, err := p.parseGameTree()
+			if err != nil {
+				return nil, err
+			}
+			subtrees = append(subtrees, subtree)
+		} else {
+			break
 		}
-		subtrees = append(subtrees, subtree)
 	}
-	if p.index < p.length && p.sgfContent[p.index] == ')' {
-		p.index++
+
+	p.skipWhitespace() // Skip any whitespace before expecting ')'
+
+	if p.index < p.length {
+		if p.sgfContent[p.index] == ')' {
+			p.index++ // Consume ')'
+		} else {
+			// If the current character is not ')', but we've skipped whitespace,
+			// it's an unexpected character (e.g., newline)
+			return nil, fmt.Errorf("expected ')' at index %d, found '%c'", p.index, p.sgfContent[p.index])
+		}
 	} else {
-		return nil, fmt.Errorf("expected ')' at index %d", p.index)
+		return nil, fmt.Errorf("expected ')' at end of SGF, but reached end of content")
 	}
 	return &SGFGameTree{
 		sequence: sequence,
@@ -1471,6 +1647,40 @@ func (g *Game) initializeGameFromSGFTree(gameTree *SGFGameTree) error {
 		g.rootNode.Comment = commentProps[0]
 	}
 
+	// Process additional properties (LB, CR, SQ, TR, MA) for the root node
+	// Create a copy of properties to exclude AB, AW, C, SZ, etc.
+	additionalProps := make(map[string][]string)
+	for key, values := range rootNodeProperties {
+		if key != "AB" && key != "AW" && key != "C" && key != "SZ" && key != "GM" && key != "FF" && key != "CA" && key != "AP" && key != "DT" && key != "GN" && key != "PC" && key != "PB" && key != "PW" && key != "BR" && key != "WR" && key != "ST" && key != "TM" && key != "OT" && key != "RE" && key != "KM" && key != "RU" {
+			additionalProps[key] = values
+		}
+	}
+
+	if len(additionalProps) > 0 {
+		moveData, err := extractMoveFromNode(additionalProps)
+		if err != nil {
+			return err
+		}
+		// Append annotation properties to root node
+		if len(moveData.CR) > 0 {
+			g.rootNode.CR = append(g.rootNode.CR, moveData.CR...)
+		}
+		if len(moveData.SQ) > 0 {
+			g.rootNode.SQ = append(g.rootNode.SQ, moveData.SQ...)
+		}
+		if len(moveData.TR) > 0 {
+			g.rootNode.TR = append(g.rootNode.TR, moveData.TR...)
+		}
+		if len(moveData.MA) > 0 {
+			g.rootNode.MA = append(g.rootNode.MA, moveData.MA...)
+		}
+		if len(moveData.LB) > 0 {
+			for point, label := range moveData.LB {
+				g.rootNode.LB[point] = label
+			}
+		}
+	}
+
 	// Set the current node to the root node to ensure the comment is displayed
 	g.setCurrentNode(g.rootNode)
 
@@ -1545,6 +1755,11 @@ func (g *Game) processMainLine(gameTree *SGFGameTree, parentNode *GameTreeNode, 
 			koY:              -1,
 			addedBlackStones: moveData.addedBlackStones, // Assign added stones
 			addedWhiteStones: moveData.addedWhiteStones,
+			CR:               moveData.CR,
+			SQ:               moveData.SQ,
+			TR:               moveData.TR,
+			MA:               moveData.MA,
+			LB:               moveData.LB,
 		}
 		g.idCounter++
 		g.nodeMap[newNode.id] = newNode
@@ -1582,10 +1797,9 @@ func (g *Game) processMainLine(gameTree *SGFGameTree, parentNode *GameTreeNode, 
 				// Pass move
 				newNode.move = [2]int{-1, -1}
 			}
-			newNode.player = switchPlayer(player)
 		} else {
-			// No move; just carry over the player
-			newNode.player = switchPlayer(currentParent.player)
+			// No move
+			newNode.move = [2]int{93, 93}
 		}
 
 		// Assign comment to the new node if present
@@ -1615,8 +1829,13 @@ func (g *Game) processMainLine(gameTree *SGFGameTree, parentNode *GameTreeNode, 
 type MoveData struct {
 	move             *Move
 	pass             bool
-	addedBlackStones []string // field for AB properties
-	addedWhiteStones []string // field for AW properties
+	addedBlackStones []string          // field for AB properties
+	addedWhiteStones []string          // field for AW properties
+	CR               []string          // field for CR properties
+	SQ               []string          // field for SQ properties
+	TR               []string          // field for TR properties
+	MA               []string          // field for MA properties
+	LB               map[string]string // field for LB properties
 }
 
 type Move struct {
@@ -1630,6 +1849,11 @@ func extractMoveFromNode(nodeProperties map[string][]string) (*MoveData, error) 
 	var player string = ""
 	var addedBlackStones []string
 	var addedWhiteStones []string
+	var CR []string
+	var SQ []string
+	var TR []string
+	var MA []string
+	LB := make(map[string]string)
 
 	// Handle Black moves
 	if bProp, hasB := nodeProperties["B"]; hasB {
@@ -1653,12 +1877,44 @@ func extractMoveFromNode(nodeProperties map[string][]string) (*MoveData, error) 
 
 	// Handle Add Black Stones
 	if abProps, hasAB := nodeProperties["AB"]; hasAB {
-		addedBlackStones = abProps
+		addedBlackStones = append(addedBlackStones, abProps...)
 	}
 
 	// Handle Add White Stones
 	if awProps, hasAW := nodeProperties["AW"]; hasAW {
-		addedWhiteStones = awProps
+		addedWhiteStones = append(addedWhiteStones, awProps...)
+	}
+
+	// Handle CR (Circle) properties
+	if crProps, hasCR := nodeProperties["CR"]; hasCR {
+		CR = append(CR, crProps...)
+	}
+
+	// Handle SQ (Square) properties
+	if sqProps, hasSQ := nodeProperties["SQ"]; hasSQ {
+		SQ = append(SQ, sqProps...)
+	}
+
+	// Handle TR (Triangle) properties
+	if trProps, hasTR := nodeProperties["TR"]; hasTR {
+		TR = append(TR, trProps...)
+	}
+
+	// Handle MA (Mark) properties
+	if maProps, hasMA := nodeProperties["MA"]; hasMA {
+		MA = append(MA, maProps...)
+	}
+
+	// Handle LB (Label) properties
+	if lbProps, hasLB := nodeProperties["LB"]; hasLB {
+		for _, lb := range lbProps {
+			parts := strings.SplitN(lb, ":", 2)
+			if len(parts) == 2 {
+				point, label := parts[0], parts[1]
+				LB[point] = label
+				fmt.Printf("Parsed LB property: point=%s, label=%s\n", point, label)
+			}
+		}
 	}
 
 	return &MoveData{
@@ -1666,6 +1922,11 @@ func extractMoveFromNode(nodeProperties map[string][]string) (*MoveData, error) 
 		pass:             move != nil && move.x == -1 && move.y == -1,
 		addedBlackStones: addedBlackStones,
 		addedWhiteStones: addedWhiteStones,
+		CR:               CR,
+		SQ:               SQ,
+		TR:               TR,
+		MA:               MA,
+		LB:               LB,
 	}, nil
 }
 
@@ -1708,34 +1969,48 @@ func (g *Game) processSequence(sequence []*SGFNode, parentNode *GameTreeNode) er
 		if err != nil {
 			return err
 		}
+
 		// Copy the board state
 		newBoardState := copyBoard(currentParent.boardState)
+
+		// Initialize the new node with empty slices and maps
 		newNode := &GameTreeNode{
 			boardState:       newBoardState,
 			parent:           currentParent,
 			id:               fmt.Sprintf("%d", g.idCounter),
 			koX:              -1,
 			koY:              -1,
-			addedBlackStones: moveData.addedBlackStones, // Assign added stones
-			addedWhiteStones: moveData.addedWhiteStones,
+			addedBlackStones: []string{},
+			addedWhiteStones: []string{},
+			CR:               []string{},
+			SQ:               []string{},
+			TR:               []string{},
+			MA:               []string{},
+			LB:               make(map[string]string),
 		}
 		g.idCounter++
 		g.nodeMap[newNode.id] = newNode
 		currentParent.children = append(currentParent.children, newNode)
 
-		// Apply added black stones
-		for _, coord := range moveData.addedBlackStones {
-			xy := convertSGFCoordToXY(coord)
-			if xy != nil {
-				newBoardState[xy[1]][xy[0]] = black
+		// Append added black stones
+		if len(moveData.addedBlackStones) > 0 {
+			newNode.addedBlackStones = append(newNode.addedBlackStones, moveData.addedBlackStones...)
+			for _, coord := range moveData.addedBlackStones {
+				xy := convertSGFCoordToXY(coord)
+				if xy != nil {
+					newBoardState[xy[1]][xy[0]] = black
+				}
 			}
 		}
 
-		// Apply added white stones
-		for _, coord := range moveData.addedWhiteStones {
-			xy := convertSGFCoordToXY(coord)
-			if xy != nil {
-				newBoardState[xy[1]][xy[0]] = white
+		// Append added white stones
+		if len(moveData.addedWhiteStones) > 0 {
+			newNode.addedWhiteStones = append(newNode.addedWhiteStones, moveData.addedWhiteStones...)
+			for _, coord := range moveData.addedWhiteStones {
+				xy := convertSGFCoordToXY(coord)
+				if xy != nil {
+					newBoardState[xy[1]][xy[0]] = white
+				}
 			}
 		}
 
@@ -1755,10 +2030,31 @@ func (g *Game) processSequence(sequence []*SGFNode, parentNode *GameTreeNode) er
 				// Pass move
 				newNode.move = [2]int{-1, -1}
 			}
-			newNode.player = switchPlayer(player)
+		} else if len(moveData.addedBlackStones) > 0 || len(moveData.addedWhiteStones) > 0 {
+			// No actual move but stones were added
+			newNode.move = [2]int{93, 93} // Arbitrary invalid coordinates
 		} else {
-			// No move; just carry over the player
-			newNode.player = switchPlayer(currentParent.player)
+			// No move and no stones added
+			newNode.move = [2]int{93, 93} // Arbitrary invalid coordinates
+		}
+
+		// Append annotation properties
+		if len(moveData.CR) > 0 {
+			newNode.CR = append(newNode.CR, moveData.CR...)
+		}
+		if len(moveData.SQ) > 0 {
+			newNode.SQ = append(newNode.SQ, moveData.SQ...)
+		}
+		if len(moveData.TR) > 0 {
+			newNode.TR = append(newNode.TR, moveData.TR...)
+		}
+		if len(moveData.MA) > 0 {
+			newNode.MA = append(newNode.MA, moveData.MA...)
+		}
+		if len(moveData.LB) > 0 {
+			for point, label := range moveData.LB {
+				newNode.LB[point] = label
+			}
 		}
 
 		// Assign comment to the new node if present
@@ -1790,12 +2086,11 @@ func convertCoordinatesToSGF(x, y int) string {
 }
 
 func generateSGF(node *GameTreeNode, sizeX, sizeY int) string {
-	sgf := ""
-	sgf += "(" // Start of variation
+	sgf := "(" // Start of variation
 
 	if node.parent == nil {
 		// Root node properties
-		sgf += ";"
+		sgf += ";"                                              // Start the root node
 		sgf += "FF[4]"                                          // File format version
 		sgf += "GM[1]"                                          // Game type (1 = Go)
 		sgf += "CA[UTF-8]"                                      // Unicode format
@@ -1833,22 +2128,51 @@ func generateSGF(node *GameTreeNode, sizeX, sizeY int) string {
 			escapedComment = strings.ReplaceAll(escapedComment, "]", "\\]")
 			sgf += fmt.Sprintf("C[%s]", escapedComment)
 		}
-	} else {
-		// Add move
-		sgf += ";"
-		move := node.move
-		moveStr := ""
-		if node.parent.player == black {
-			moveStr += "B"
-		} else {
-			moveStr += "W"
+
+		// Include CR, SQ, TR, MA, LB properties if present
+		if len(node.CR) > 0 {
+			sgf += "CR"
+			for _, coord := range node.CR {
+				sgf += fmt.Sprintf("[%s]", coord)
+			}
 		}
-		if move[0] >= 0 && move[1] >= 0 {
-			coords := convertCoordinatesToSGF(move[0], move[1])
-			moveStr += fmt.Sprintf("[%s]", coords)
-		} else {
-			// Pass move
-			moveStr += "[]"
+		if len(node.SQ) > 0 {
+			sgf += "SQ"
+			for _, coord := range node.SQ {
+				sgf += fmt.Sprintf("[%s]", coord)
+			}
+		}
+		if len(node.TR) > 0 {
+			sgf += "TR"
+			for _, coord := range node.TR {
+				sgf += fmt.Sprintf("[%s]", coord)
+			}
+		}
+		if len(node.MA) > 0 {
+			sgf += "MA"
+			for _, coord := range node.MA {
+				sgf += fmt.Sprintf("[%s]", coord)
+			}
+		}
+		if len(node.LB) > 0 {
+			sgf += "LB"
+			for point, label := range node.LB {
+				sgf += fmt.Sprintf("[%s:%s]", point, label)
+			}
+		}
+
+	} else {
+		sgf += ";" // Start a new node
+
+		// Add move properties only if the node has a valid move
+		if node.move[0] >= 0 && node.move[0] < sizeX && node.move[1] >= 0 && node.move[1] < sizeY {
+			if node.parent.player == black {
+				sgf += "B"
+			} else {
+				sgf += "W"
+			}
+			coords := convertCoordinatesToSGF(node.move[0], node.move[1])
+			sgf += fmt.Sprintf("[%s]", coords)
 		}
 
 		// Include comment if present
@@ -1856,20 +2180,52 @@ func generateSGF(node *GameTreeNode, sizeX, sizeY int) string {
 			// Escape ']' and '\' characters in comments
 			escapedComment := strings.ReplaceAll(node.Comment, "\\", "\\\\")
 			escapedComment = strings.ReplaceAll(escapedComment, "]", "\\]")
-			moveStr += fmt.Sprintf("C[%s]", escapedComment)
+			sgf += fmt.Sprintf("C[%s]", escapedComment)
 		}
 
-		sgf += moveStr
+		// Include CR, SQ, TR, MA, LB properties if present
+		if len(node.CR) > 0 {
+			sgf += "CR"
+			for _, coord := range node.CR {
+				sgf += fmt.Sprintf("[%s]", coord)
+			}
+		}
+		if len(node.SQ) > 0 {
+			sgf += "SQ"
+			for _, coord := range node.SQ {
+				sgf += fmt.Sprintf("[%s]", coord)
+			}
+		}
+		if len(node.TR) > 0 {
+			sgf += "TR"
+			for _, coord := range node.TR {
+				sgf += fmt.Sprintf("[%s]", coord)
+			}
+		}
+		if len(node.MA) > 0 {
+			sgf += "MA"
+			for _, coord := range node.MA {
+				sgf += fmt.Sprintf("[%s]", coord)
+			}
+		}
+		if len(node.LB) > 0 {
+			sgf += "LB"
+			for point, label := range node.LB {
+				sgf += fmt.Sprintf("[%s:%s]", point, label)
+			}
+		}
 
-		// Handle added stones in variations
+		// Handle added stones (AB and AW) within the same node
 		if len(node.addedBlackStones) > 0 {
+			sgf += "AB"
 			for _, coord := range node.addedBlackStones {
-				sgf += fmt.Sprintf("AB[%s]", coord)
+				sgf += fmt.Sprintf("[%s]", coord)
 			}
 		}
 		if len(node.addedWhiteStones) > 0 {
+			sgf += "AW"
 			for _, coord := range node.addedWhiteStones {
-				sgf += fmt.Sprintf("AW[%s]", coord)
+				sgf += fmt.Sprintf("[%s]", coord)
 			}
 		}
 	}
