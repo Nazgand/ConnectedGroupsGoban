@@ -167,7 +167,7 @@ func (r *resizingContainerRenderer) Objects() []fyne.CanvasObject {
 func (r *resizingContainerRenderer) Destroy() {}
 
 func main() {
-	a := app.New()
+	a := app.NewWithID("com.nazgand.connectedgroupsgoban")
 	w := a.NewWindow("Connected Groups Goban Version " + version)
 	game := &Game{
 		player:  black,
@@ -330,12 +330,14 @@ func main() {
 		),
 		gameTreeResizingContainer, // Use the ResizingContainer here
 	)
+	controls.SetOffset(0)
 
 	// Main layout with split view
 	content := container.NewHSplit(
 		controls,
 		game.boardCanvas,
 	)
+	content.SetOffset(0)
 	w.SetContent(content)
 	w.Resize(fyne.NewSize(800, 600))
 	w.Show()
