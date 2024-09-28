@@ -76,7 +76,7 @@ func (g *Game) newGameTreeNode() *GameTreeNode {
 		SQ:               make([][]bool, g.sizeY),
 		TR:               make([][]bool, g.sizeY),
 		MA:               make([][]bool, g.sizeY),
-		LB:               make(map[string]string),
+		LB:               make([][]string, g.sizeY),
 	}
 
 	for y := 0; y < g.sizeY; y++ {
@@ -86,6 +86,7 @@ func (g *Game) newGameTreeNode() *GameTreeNode {
 		newNode.SQ[y] = make([]bool, g.sizeX)
 		newNode.TR[y] = make([]bool, g.sizeX)
 		newNode.MA[y] = make([]bool, g.sizeX)
+		newNode.LB[y] = make([]string, g.sizeX)
 	}
 
 	g.nodeMap[newNode.id] = newNode
@@ -93,22 +94,22 @@ func (g *Game) newGameTreeNode() *GameTreeNode {
 }
 
 type GameTreeNode struct {
-	boardState       [][]string        // Current state of the board at this node
-	move             [2]int            // Coordinates of the move ([x, y]); (-1, -1) represents a pass
-	player           string            // Player who made the move ("B" for Black, "W" for White)
-	children         []*GameTreeNode   // Child nodes representing subsequent moves
-	parent           *GameTreeNode     // Parent node in the game tree
-	id               string            // Unique identifier for the node
-	koX              int               // X-coordinate for ko rule; -1 if not applicable
-	koY              int               // Y-coordinate for ko rule; -1 if not applicable
-	Comment          string            // Optional comment for the move
-	addedBlackStones [][]bool          // Coordinates of additional Black stones (AB properties)
-	addedWhiteStones [][]bool          // Coordinates of additional White stones (AW properties)
-	CR               [][]bool          // Coordinates for circle annotations
-	SQ               [][]bool          // Coordinates for square annotations
-	TR               [][]bool          // Coordinates for triangle annotations
-	MA               [][]bool          // Coordinates for mark (X) annotations
-	LB               map[string]string // Labels for specific points on the board
+	boardState       [][]string      // Current state of the board at this node
+	move             [2]int          // Coordinates of the move ([x, y]); (-1, -1) represents a pass
+	player           string          // Player who made the move ("B" for Black, "W" for White)
+	children         []*GameTreeNode // Child nodes representing subsequent moves
+	parent           *GameTreeNode   // Parent node in the game tree
+	id               string          // Unique identifier for the node
+	koX              int             // X-coordinate for ko rule; -1 if not applicable
+	koY              int             // Y-coordinate for ko rule; -1 if not applicable
+	Comment          string          // Optional comment for the move
+	addedBlackStones [][]bool        // Coordinates of additional Black stones (AB properties)
+	addedWhiteStones [][]bool        // Coordinates of additional White stones (AW properties)
+	CR               [][]bool        // Coordinates for circle annotations
+	SQ               [][]bool        // Coordinates for square annotations
+	TR               [][]bool        // Coordinates for triangle annotations
+	MA               [][]bool        // Coordinates for mark (X) annotations
+	LB               [][]string      // Labels for specific points on the board
 }
 
 func (gtn *GameTreeNode) addBlackStone(x, y int) {
@@ -865,16 +866,6 @@ func (g *Game) drawStones() {
 func (g *Game) drawAnnotations() {
 	annotationsLayer := container.NewWithoutLayout()
 
-	// Helper function to calculate positions
-	getPosition := func(coord string) (fyne.Position, bool) {
-		xy := convertSGFCoordToXY(coord)
-		if xy == nil {
-			return fyne.Position{}, false
-		}
-		pos := g.boardCoordsToPixel(xy[0], xy[1])
-		return pos, true
-	}
-
 	// Draw Circles (CR)
 	for y := 0; y < g.sizeY; y++ {
 		for x := 0; x < g.sizeX; x++ {
@@ -973,23 +964,24 @@ func (g *Game) drawAnnotations() {
 	}
 
 	// Draw Labels (LB)
-	for coord, label := range g.currentNode.LB {
-		pos, ok := getPosition(coord)
-		if !ok {
-			continue
-		}
-		text := canvas.NewText(label, redColor)
-		text.TextSize = g.cellSize * 0.4
-		text.Alignment = fyne.TextAlignCenter
-		text.TextStyle = fyne.TextStyle{Bold: true}
-		text.Resize(text.MinSize()) // Calculate the size needed for the text
+	for y := 0; y < g.sizeY; y++ {
+		for x := 0; x < g.sizeX; x++ {
+			if g.currentNode.LB[y][x] != "" {
+				pos := g.boardCoordsToPixel(x, y)
+				text := canvas.NewText(g.currentNode.LB[y][x], redColor)
+				text.TextSize = g.cellSize * 0.4
+				text.Alignment = fyne.TextAlignCenter
+				text.TextStyle = fyne.TextStyle{Bold: true}
+				text.Resize(text.MinSize()) // Calculate the size needed for the text
 
-		// Center the text on the point
-		text.Move(fyne.Position{
-			X: pos.X + 0.5*g.cellSize - text.Size().Width/2,
-			Y: pos.Y + 0.5*g.cellSize - text.Size().Height/2,
-		})
-		annotationsLayer.Add(text)
+				// Center the text on the point
+				text.Move(fyne.Position{
+					X: pos.X + 0.5*g.cellSize - text.Size().Width/2,
+					Y: pos.Y + 0.5*g.cellSize - text.Size().Height/2,
+				})
+				annotationsLayer.Add(text)
+			}
+		}
 	}
 
 	// Add annotations layer to gridContainer
@@ -1795,10 +1787,13 @@ func (g *Game) initializeGameFromSGFTree(gameTree *SGFGameTree) error {
 			}
 			g.rootNode.MA[xy[1]][xy[0]] = true
 		}
-		if len(moveData.LB) > 0 {
-			for point, label := range moveData.LB {
-				g.rootNode.LB[point] = label
+		for coord, label := range moveData.LB {
+			xy := convertSGFCoordToXY(coord)
+			if xy == nil {
+				fmt.Printf("Warning: Invalid LB coordinate '%s' skipped.\n", coord)
+				continue
 			}
+			g.rootNode.LB[xy[1]][xy[0]] = label
 		}
 	}
 
@@ -2170,9 +2165,10 @@ func (g *Game) processSequence(sequence []*SGFNode, parentNode *GameTreeNode) er
 				newNode.MA[xy[1]][xy[0]] = true
 			}
 		}
-		if len(moveData.LB) > 0 {
-			for point, label := range moveData.LB {
-				newNode.LB[point] = label
+		for coord, label := range moveData.LB {
+			xy := convertSGFCoordToXY(coord)
+			if xy[0] >= 0 && xy[1] >= 0 && xy[0] < g.sizeX && xy[1] < g.sizeY {
+				newNode.LB[xy[1]][xy[0]] = label
 			}
 		}
 
@@ -2302,11 +2298,16 @@ func formatAnnotations(node *GameTreeNode) string {
 		annotations += xMarkText
 	}
 
-	if len(node.LB) > 0 {
-		annotations += "LB"
-		for point, label := range node.LB {
-			annotations += fmt.Sprintf("[%s:%s]", point, label)
+	labelsText := "LB"
+	for y, arr := range node.LB {
+		for x, el := range arr {
+			if el != "" {
+				labelsText += "[" + convertCoordinatesToSGF(x, y) + ":" + el + "]"
+			}
 		}
+	}
+	if labelsText != "LB" {
+		annotations += labelsText
 	}
 
 	return annotations
