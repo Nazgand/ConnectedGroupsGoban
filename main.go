@@ -7,6 +7,7 @@ import (
 	"io"
 	"math"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -20,6 +21,7 @@ import (
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/driver/desktop"
+	"fyne.io/fyne/v2/storage"
 	"fyne.io/fyne/v2/widget"
 )
 
@@ -258,9 +260,9 @@ func main() {
 		mouseMode: "play",
 		nodeMap:   make(map[string]*GameTreeNode),
 		komi:      7.0,
-		gtpPath:   "/usr/games/gnugo",
-		gtpArgs:   "--mode gtp --level 15 --large-scale --cache-size 93 --chinese-rules --komi 7",
-		gtpColor:  "B",
+		gtpPath:   "/usr/games/leela_gtp",
+		gtpArgs:   "-g -p 20000 --noponder",
+		gtpColor:  "W",
 	}
 
 	// Create scoring status label
@@ -509,8 +511,33 @@ func (g *Game) showEngineSettings() {
 	gtpColorEntry := widget.NewSelect([]string{"B", "W"}, func(value string) {})
 	gtpColorEntry.SetSelected(g.gtpColor)
 
+	// Create the "Browse" button for GTP Path
+	browseButton := widget.NewButton("Browse", func() {
+		// Open file selector
+		fileDialog := dialog.NewFileOpen(func(reader fyne.URIReadCloser, err error) {
+			if err != nil || reader == nil {
+				return
+			}
+			defer reader.Close()
+			gtpPathEntry.SetText(reader.URI().Path())
+		}, g.window)
+
+		// If g.gtpPath is not a malformed path, set the initial directory
+		if g.gtpPath != "" {
+			dir := filepath.Dir(g.gtpPath)
+			uri := storage.NewFileURI(dir)
+			listableURI, err := storage.ListerForURI(uri)
+			if err == nil {
+				fileDialog.SetLocation(listableURI)
+			}
+		}
+
+		fileDialog.Show()
+	})
+
 	// Create form items
 	formItems := []*widget.FormItem{
+		widget.NewFormItem("GTP Path", browseButton),
 		widget.NewFormItem("GTP Path", gtpPathEntry),
 		widget.NewFormItem("GTP Arguments", gtpArgsEntry),
 		widget.NewFormItem("GTP Color", gtpColorEntry),
@@ -727,7 +754,7 @@ func (g *Game) gtpToClientCoords(coord string) (int, int, error) {
 		}
 	}
 	if x == -1 {
-		return 0, 0, fmt.Errorf("invalid GTP coordinate letter: %s", letter)
+		return 0, 0, fmt.Errorf("invalid GTP coordinate letter, coord: %s, %s", letter, coord)
 	}
 	number, err := strconv.Atoi(numberStr)
 	if err != nil {
