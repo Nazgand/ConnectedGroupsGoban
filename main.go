@@ -436,6 +436,16 @@ func main() {
 		fyne.NewMenuItem("Detach Engine", func() {
 			game.detachEngine()
 		}),
+		fyne.NewMenuItem("Start Self Play", func() {
+			game.gtpColor = "Both"
+			if game.gtpCmd == nil {
+				game.attachEngine()
+			}
+			game.startSelfPlay()
+		}),
+		fyne.NewMenuItem("Stop Self Play", func() {
+			game.stopSelfPlay()
+		}),
 	)
 
 	// Update the main menu to include the new "Engine" menu
@@ -737,9 +747,18 @@ func (g *Game) attachEngine() {
 		g.detachEngine()
 	} else {
 		dialog.ShowInformation("Engine Attached", "Successfully attached to the engine.", g.window)
-		// Start self-play if gtpColor is "Both"
+		// Check if it's the engine's move
+		nextPlayer := switchPlayer(g.currentNode.player)
 		if g.gtpColor == "Both" {
 			g.startSelfPlay()
+		} else if g.gtpColor == nextPlayer {
+			engineMove, err := g.sendGTPCommand(fmt.Sprintf("genmove %s", g.gtpColor))
+			if err != nil {
+				g.showError(err)
+				g.detachEngine()
+				return
+			}
+			g.handleEngineMove(engineMove)
 		}
 	}
 }
@@ -927,37 +946,84 @@ func (g *Game) gtpToClientCoords(coord string) (int, int, error) {
 	return x, y, nil
 }
 
+func (g *Game) playMove(x, y int, player string, informEngine bool) {
+	// Check if the move already exists as a child of the current node
+	moveExists := false
+	for _, child := range g.currentNode.children {
+		if child.move[0] == x && child.move[1] == y && child.player == player {
+			// Move already exists, switch to that node
+			g.currentNode = child
+			moveExists = true
+			break
+		}
+	}
+
+	if !moveExists {
+		if x == -1 && y == -1 {
+			// Handle pass move
+			newNode := g.newGameTreeNode()
+			newNode.boardState = copyBoard(g.currentNode.boardState)
+			newNode.player = player
+			newNode.move = [2]int{-1, -1}
+			newNode.parent = g.currentNode
+			g.currentNode.children = append(g.currentNode.children, newNode)
+			g.currentNode = newNode
+		} else {
+			if !g.isMoveLegal(x, y, player) {
+				g.showError(fmt.Errorf("illegal move at (%d, %d) by player %s", x, y, player))
+				return
+			}
+			// Create new node with the move
+			boardCopy := copyBoard(g.currentNode.boardState)
+			boardCopy[y][x] = player
+			koX, koY := g.captureStones(boardCopy, x, y, player)
+			newNode := g.newGameTreeNode()
+			newNode.boardState = boardCopy
+			newNode.move = [2]int{x, y}
+			newNode.player = player
+			newNode.parent = g.currentNode
+			newNode.koX = koX
+			newNode.koY = koY
+			g.currentNode.children = append(g.currentNode.children, newNode)
+			g.currentNode = newNode
+		}
+	}
+
+	g.updateCommentTextbox()
+	g.updateGameTreeUI()
+	g.redrawBoard()
+
+	// Inform the engine of the move if it is attached and informEngine is true
+	if informEngine && g.gtpCmd != nil {
+		coord := "pass"
+		if x != -1 && y != -1 {
+			coord = g.clientToGTPCoords(x, y)
+		}
+		_, err := g.sendGTPCommand(fmt.Sprintf("play %s %s", player, coord))
+		if err != nil {
+			g.showError(err)
+			g.detachEngine()
+		}
+	}
+}
+
 func (g *Game) handleEngineMove(coord string) {
 	coord = strings.TrimSpace(coord)
 	if coord == "resign" {
 		dialog.ShowInformation("Engine Resigned", "The engine has resigned.", g.window)
 		return
 	}
-	x, y, err := g.gtpToClientCoords(coord)
-	if err != nil {
-		g.showError(err)
-		return
+	x, y := -1, -1
+	if coord != "pass" {
+		var err error
+		x, y, err = g.gtpToClientCoords(coord)
+		if err != nil {
+			g.showError(err)
+			return
+		}
 	}
 	player := switchPlayer(g.currentNode.player)
-	if !g.isMoveLegal(x, y, player) {
-		g.showError(fmt.Errorf("engine played an illegal move %d, %d", x, y))
-		return
-	}
-	boardCopy := copyBoard(g.currentNode.boardState)
-	boardCopy[y][x] = player
-	koX, koY := g.captureStones(boardCopy, x, y, player)
-	newNode := g.newGameTreeNode()
-	newNode.boardState = boardCopy
-	newNode.move = [2]int{x, y}
-	newNode.player = player
-	newNode.parent = g.currentNode
-	newNode.koX = koX
-	newNode.koY = koY
-	g.currentNode.children = append(g.currentNode.children, newNode)
-	g.currentNode = newNode
-	g.updateCommentTextbox()
-	g.updateGameTreeUI()
-	g.redrawBoard()
+	g.playMove(x, y, player, false) // Do not inform the engine of its own move
 }
 
 func (g *Game) updateCommentTextbox() {
@@ -1212,6 +1278,15 @@ func (g *Game) initializeBoard() {
 	g.nodeMap[rootNode.id] = rootNode
 	g.setMouseMode("play")
 	g.updateCommentTextbox()
+
+	// If engine is attached, re-initialize it with the new board size
+	if g.gtpCmd != nil {
+		err := g.initializeEngine()
+		if err != nil {
+			g.showError(err)
+			g.detachEngine()
+		}
+	}
 }
 
 func copyBoard(board [][]string) [][]string {
@@ -1737,61 +1812,16 @@ func (g *Game) handleMouseClick(ev *fyne.PointEvent) {
 			return
 		}
 		player := switchPlayer(g.currentNode.player)
-		if !g.isMoveLegal(x, y, player) {
-			return
-		}
-
-		// Check if any child of the current node has this move
-		moveExists := false
-		for _, child := range g.currentNode.children {
-			if child.move[0] == x && child.move[1] == y && child.player == player {
-				// Move already exists, switch to that node
-				g.currentNode = child
-				moveExists = true
-				break
+		g.playMove(x, y, player, true)
+		// If engine should play next
+		if g.gtpCmd != nil && g.gtpColor == switchPlayer(player) {
+			engineMove, err := g.sendGTPCommand(fmt.Sprintf("genmove %s", switchPlayer(player)))
+			if err != nil {
+				g.showError(err)
+				g.detachEngine()
+				return
 			}
-		}
-
-		if !moveExists {
-			// Create new node
-			boardCopy := copyBoard(g.currentNode.boardState)
-			boardCopy[y][x] = player
-			koX, koY := g.captureStones(boardCopy, x, y, player)
-			newNode := g.newGameTreeNode()
-			newNode.boardState = boardCopy
-			newNode.move = [2]int{x, y}
-			newNode.player = player
-			newNode.parent = g.currentNode
-			newNode.koX = koX
-			newNode.koY = koY
-			g.currentNode.children = append(g.currentNode.children, newNode)
-			g.currentNode = newNode
-		}
-
-		g.updateCommentTextbox()
-		g.updateGameTreeUI()
-		g.redrawBoard()
-
-		// Engine interaction
-		if g.gtpCmd != nil {
-			player := g.currentNode.player
-			if g.gtpColor != player {
-				// Send move to engine
-				coord := g.clientToGTPCoords(x, y)
-				if _, err := g.sendGTPCommand(fmt.Sprintf("play %s %s", player, coord)); err != nil {
-					g.showError(err)
-					g.detachEngine()
-				}
-			}
-			// Generate engine moves if needed
-			if g.gtpColor == switchPlayer(player) {
-				engineMove, err := g.sendGTPCommand(fmt.Sprintf("genmove %s", switchPlayer(player)))
-				if err != nil {
-					g.showError(err)
-					g.detachEngine()
-				}
-				g.handleEngineMove(engineMove)
-			}
+			g.handleEngineMove(engineMove)
 		}
 	case "score":
 		g.toggleGroupStatus(x, y)
@@ -2346,6 +2376,15 @@ func (g *Game) initializeGameFromSGFTree(gameTree *SGFGameTree) error {
 
 	// Initialize the board
 	g.initializeBoard()
+
+	// If engine is attached, re-initialize it with the new board size
+	if g.gtpCmd != nil {
+		err := g.initializeEngine()
+		if err != nil {
+			g.showError(err)
+			g.detachEngine()
+		}
+	}
 
 	// Handle initial stones (AB and AW properties)
 	initialBoard := g.rootNode.boardState
@@ -3050,33 +3089,19 @@ func (g *Game) handlePass() {
 	if g.selfPlaying {
 		return // Do nothing during self-play
 	}
-	newNode := g.newGameTreeNode()
-	newNode.boardState = copyBoard(g.currentNode.boardState)
-	newNode.player = switchPlayer(g.currentNode.player) // Set the player who passed
-	newNode.move = [2]int{-1, -1}
-	newNode.parent = g.currentNode
-	g.currentNode.children = append(g.currentNode.children, newNode)
-	g.currentNode = newNode
-	g.updateGameTreeUI()
-	g.updateCommentTextbox()
-	g.redrawBoard()
+	player := switchPlayer(g.currentNode.player)
+	g.playMove(-1, -1, player, true)
 	if g.mouseMode == "score" {
 		g.exitScoringMode()
 	}
-	if g.gtpCmd != nil {
-		player := switchPlayer(g.currentNode.player)
-		// Generate engine moves if needed
-		if g.gtpColor == player {
-			if _, err := g.sendGTPCommand(fmt.Sprintf("play %s pass", player)); err != nil {
-				g.showError(err)
-				g.detachEngine()
-			}
-			engineMove, err := g.sendGTPCommand(fmt.Sprintf("genmove %s", player))
-			if err != nil {
-				g.showError(err)
-				g.detachEngine()
-			}
-			g.handleEngineMove(engineMove)
+	// If engine should play next
+	if g.gtpCmd != nil && g.gtpColor == switchPlayer(player) {
+		engineMove, err := g.sendGTPCommand(fmt.Sprintf("genmove %s", switchPlayer(player)))
+		if err != nil {
+			g.showError(err)
+			g.detachEngine()
+			return
 		}
+		g.handleEngineMove(engineMove)
 	}
 }
