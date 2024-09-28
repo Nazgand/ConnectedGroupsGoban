@@ -26,7 +26,7 @@ const (
 	black             = "B"
 	white             = "W"
 	gridLineThickness = 0.15
-	version           = "1"
+	version           = "2"
 )
 
 var (
@@ -70,18 +70,22 @@ func (g *Game) newGameTreeNode() *GameTreeNode {
 		id:               fmt.Sprintf("%d", g.idCounter),
 		koX:              -1,
 		koY:              -1,
-		addedBlackStones: make([][]bool, g.sizeY), // Initialize the 2D array
-		addedWhiteStones: []string{},
-		CR:               []string{},
-		SQ:               []string{},
-		TR:               []string{},
-		MA:               []string{},
+		addedBlackStones: make([][]bool, g.sizeY),
+		addedWhiteStones: make([][]bool, g.sizeY),
+		CR:               make([][]bool, g.sizeY),
+		SQ:               make([][]bool, g.sizeY),
+		TR:               make([][]bool, g.sizeY),
+		MA:               make([][]bool, g.sizeY),
 		LB:               make(map[string]string),
 	}
 
-	// Initialize each row in addedBlackStones
-	for y := range newNode.addedBlackStones {
+	for y := 0; y < g.sizeY; y++ {
 		newNode.addedBlackStones[y] = make([]bool, g.sizeX)
+		newNode.addedWhiteStones[y] = make([]bool, g.sizeX)
+		newNode.CR[y] = make([]bool, g.sizeX)
+		newNode.SQ[y] = make([]bool, g.sizeX)
+		newNode.TR[y] = make([]bool, g.sizeX)
+		newNode.MA[y] = make([]bool, g.sizeX)
 	}
 
 	g.nodeMap[newNode.id] = newNode
@@ -99,11 +103,11 @@ type GameTreeNode struct {
 	koY              int               // Y-coordinate for ko rule; -1 if not applicable
 	Comment          string            // Optional comment for the move
 	addedBlackStones [][]bool          // Coordinates of additional Black stones (AB properties)
-	addedWhiteStones []string          // Coordinates of additional White stones (AW properties)
-	CR               []string          // Coordinates for circle annotations
-	SQ               []string          // Coordinates for square annotations
-	TR               []string          // Coordinates for triangle annotations
-	MA               []string          // Coordinates for mark (X) annotations
+	addedWhiteStones [][]bool          // Coordinates of additional White stones (AW properties)
+	CR               [][]bool          // Coordinates for circle annotations
+	SQ               [][]bool          // Coordinates for square annotations
+	TR               [][]bool          // Coordinates for triangle annotations
+	MA               [][]bool          // Coordinates for mark (X) annotations
 	LB               map[string]string // Labels for specific points on the board
 }
 
@@ -115,6 +119,23 @@ func (gtn *GameTreeNode) addBlackStone(x, y int) {
 
 func (gtn *GameTreeNode) hasAddedBlackStones() bool {
 	for _, arr := range gtn.addedBlackStones {
+		for _, el := range arr {
+			if el {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (gtn *GameTreeNode) addWhiteStone(x, y int) {
+	if x >= 0 && x < len(gtn.addedWhiteStones[0]) && y >= 0 && y < len(gtn.addedWhiteStones) {
+		gtn.addedWhiteStones[y][x] = true
+	}
+}
+
+func (gtn *GameTreeNode) hasAddedWhiteStones() bool {
+	for _, arr := range gtn.addedWhiteStones {
 		for _, el := range arr {
 			if el {
 				return true
@@ -596,11 +617,9 @@ func (g *Game) buildGameTreeUI(node *GameTreeNode) fyne.CanvasObject {
 	var nodeLabel string
 	if node.parent == nil {
 		nodeLabel = "Root"
-	} else if node.hasAddedBlackStones() || len(node.addedWhiteStones) > 0 {
-		// Handle added stones
+	} else if node.hasAddedBlackStones() || node.hasAddedWhiteStones() {
 		labels := []string{}
 
-		// Process added Black stones
 		for y, arr := range node.addedBlackStones {
 			for x, el := range arr {
 				if el {
@@ -610,17 +629,14 @@ func (g *Game) buildGameTreeUI(node *GameTreeNode) fyne.CanvasObject {
 			}
 		}
 
-		// Process added White stones
-		for _, coord := range node.addedWhiteStones {
-			xy := convertSGFCoordToXY(coord)
-			if xy != nil {
-				label := fmt.Sprintf("+W:(%d,%d)", xy[0], xy[1])
-				labels = append(labels, label)
-			} else {
-				labels = append(labels, fmt.Sprintf("+W:Invalid(%s)", coord))
+		for y, arr := range node.addedWhiteStones {
+			for x, el := range arr {
+				if el {
+					label := fmt.Sprintf("+W:(%d,%d)", x, y)
+					labels = append(labels, label)
+				}
 			}
 		}
-
 		nodeLabel = strings.Join(labels, ", ")
 	} else if node.move[0] == -1 && node.move[1] == -1 {
 		nodeLabel = fmt.Sprintf("%s:Pass", switchPlayer(node.player))
@@ -860,96 +876,100 @@ func (g *Game) drawAnnotations() {
 	}
 
 	// Draw Circles (CR)
-	for _, coord := range g.currentNode.CR {
-		pos, ok := getPosition(coord)
-		if !ok {
-			continue
+	for y := 0; y < g.sizeY; y++ {
+		for x := 0; x < g.sizeX; x++ {
+			if g.currentNode.CR[y][x] {
+				pos := g.boardCoordsToPixel(x, y)
+				circle := canvas.NewCircle(color.Transparent)
+				circle.StrokeColor = redColor
+				circle.StrokeWidth = g.cellSize * 0.05
+				circle.Resize(fyne.NewSize(g.cellSize*0.6, g.cellSize*0.6))
+				circle.Move(fyne.Position{
+					X: pos.X + 0.5*g.cellSize - circle.Size().Width/2,
+					Y: pos.Y + 0.5*g.cellSize - circle.Size().Height/2,
+				})
+				annotationsLayer.Add(circle)
+			}
 		}
-		circle := canvas.NewCircle(color.Transparent)
-		circle.StrokeColor = redColor
-		circle.StrokeWidth = g.cellSize * 0.05
-		circle.Resize(fyne.NewSize(g.cellSize*0.6, g.cellSize*0.6))
-		circle.Move(fyne.Position{
-			X: pos.X + 0.5*g.cellSize - circle.Size().Width/2,
-			Y: pos.Y + 0.5*g.cellSize - circle.Size().Height/2,
-		})
-		annotationsLayer.Add(circle)
 	}
 
 	// Draw Squares (SQ)
-	for _, coord := range g.currentNode.SQ {
-		pos, ok := getPosition(coord)
-		if !ok {
-			continue
+	for y := 0; y < g.sizeY; y++ {
+		for x := 0; x < g.sizeX; x++ {
+			if g.currentNode.SQ[y][x] {
+				pos := g.boardCoordsToPixel(x, y)
+				square := canvas.NewRectangle(color.Transparent)
+				square.StrokeColor = redColor
+				square.StrokeWidth = g.cellSize * 0.05
+				square.Resize(fyne.NewSize(g.cellSize*0.6, g.cellSize*0.6))
+				square.Move(fyne.Position{
+					X: pos.X + 0.5*g.cellSize - square.Size().Width/2,
+					Y: pos.Y + 0.5*g.cellSize - square.Size().Height/2,
+				})
+				annotationsLayer.Add(square)
+			}
 		}
-		square := canvas.NewRectangle(color.Transparent)
-		square.StrokeColor = redColor
-		square.StrokeWidth = g.cellSize * 0.05
-		square.Resize(fyne.NewSize(g.cellSize*0.6, g.cellSize*0.6))
-		square.Move(fyne.Position{
-			X: pos.X + 0.5*g.cellSize - square.Size().Width/2,
-			Y: pos.Y + 0.5*g.cellSize - square.Size().Height/2,
-		})
-		annotationsLayer.Add(square)
 	}
 
 	// Draw Triangles (TR) using three lines
 	tSize := g.cellSize * 0.39
 	tXOffset := tSize * float32(math.Sin(math.Pi/3))
 	tYOffset := tSize * float32(math.Cos(math.Pi/3))
-	for _, coord := range g.currentNode.TR {
-		pos, ok := getPosition(coord)
-		if !ok {
-			continue
+	for y := 0; y < g.sizeY; y++ {
+		for x := 0; x < g.sizeX; x++ {
+			if g.currentNode.TR[y][x] {
+				pos := g.boardCoordsToPixel(x, y)
+				pos0 := fyne.NewPos(pos.X+0.5*g.cellSize, pos.Y+0.5*g.cellSize-tSize)
+				pos1 := fyne.NewPos(pos.X+0.5*g.cellSize-tXOffset, pos.Y+0.5*g.cellSize+tYOffset)
+				pos2 := fyne.NewPos(pos.X+0.5*g.cellSize+tXOffset, pos.Y+0.5*g.cellSize+tYOffset)
+
+				// Create triangle lines
+				line1 := canvas.NewLine(redColor)
+				line1.StrokeWidth = g.cellSize * 0.05
+				line1.Position1 = pos0
+				line1.Position2 = pos1
+
+				line2 := canvas.NewLine(redColor)
+				line2.StrokeWidth = g.cellSize * 0.05
+				line2.Position1 = pos1
+				line2.Position2 = pos2
+
+				line3 := canvas.NewLine(redColor)
+				line3.StrokeWidth = g.cellSize * 0.05
+				line3.Position1 = pos2
+				line3.Position2 = pos0
+
+				// Add lines to annotations layer
+				annotationsLayer.Add(line1)
+				annotationsLayer.Add(line2)
+				annotationsLayer.Add(line3)
+			}
 		}
-		pos0 := fyne.NewPos(pos.X+0.5*g.cellSize, pos.Y+0.5*g.cellSize-tSize)
-		pos1 := fyne.NewPos(pos.X+0.5*g.cellSize-tXOffset, pos.Y+0.5*g.cellSize+tYOffset)
-		pos2 := fyne.NewPos(pos.X+0.5*g.cellSize+tXOffset, pos.Y+0.5*g.cellSize+tYOffset)
-
-		// Create triangle lines
-		line1 := canvas.NewLine(redColor)
-		line1.StrokeWidth = g.cellSize * 0.05
-		line1.Position1 = pos0
-		line1.Position2 = pos1
-
-		line2 := canvas.NewLine(redColor)
-		line2.StrokeWidth = g.cellSize * 0.05
-		line2.Position1 = pos1
-		line2.Position2 = pos2
-
-		line3 := canvas.NewLine(redColor)
-		line3.StrokeWidth = g.cellSize * 0.05
-		line3.Position1 = pos2
-		line3.Position2 = pos0
-
-		// Add lines to annotations layer
-		annotationsLayer.Add(line1)
-		annotationsLayer.Add(line2)
-		annotationsLayer.Add(line3)
 	}
 
 	// Draw Xs (MA) using two crossing lines
-	for _, coord := range g.currentNode.MA {
-		pos, ok := getPosition(coord)
-		if !ok {
-			continue
+	for y := 0; y < g.sizeY; y++ {
+		for x := 0; x < g.sizeX; x++ {
+			if g.currentNode.MA[y][x] {
+				pos := g.boardCoordsToPixel(x, y)
+				size := g.cellSize * 0.6
+
+				// Define the two crossing lines relative to the position
+				line1 := canvas.NewLine(redColor)
+				line1.StrokeWidth = g.cellSize * 0.05
+				line1.Position1 = fyne.NewPos(pos.X+0.5*g.cellSize-size/2, pos.Y+0.5*g.cellSize-size/2)
+				line1.Position2 = fyne.NewPos(pos.X+0.5*g.cellSize+size/2, pos.Y+0.5*g.cellSize+size/2)
+
+				line2 := canvas.NewLine(redColor)
+				line2.StrokeWidth = g.cellSize * 0.05
+				line2.Position1 = fyne.NewPos(pos.X+0.5*g.cellSize+size/2, pos.Y+0.5*g.cellSize-size/2)
+				line2.Position2 = fyne.NewPos(pos.X+0.5*g.cellSize-size/2, pos.Y+0.5*g.cellSize+size/2)
+
+				// Add lines to annotations layer
+				annotationsLayer.Add(line1)
+				annotationsLayer.Add(line2)
+			}
 		}
-		size := g.cellSize * 0.6
-
-		// Define the two crossing lines relative to the position
-		line1 := canvas.NewLine(redColor)
-		line1.StrokeWidth = g.cellSize * 0.05
-		line1.Position1 = fyne.NewPos(pos.X+0.5*g.cellSize-size/2, pos.Y+0.5*g.cellSize-size/2)
-		line1.Position2 = fyne.NewPos(pos.X+0.5*g.cellSize+size/2, pos.Y+0.5*g.cellSize+size/2)
-
-		line2 := canvas.NewLine(redColor)
-		line2.StrokeWidth = g.cellSize * 0.05
-		line2.Position1 = fyne.NewPos(pos.X+0.5*g.cellSize+size/2, pos.Y+0.5*g.cellSize-size/2)
-		line2.Position2 = fyne.NewPos(pos.X+0.5*g.cellSize-size/2, pos.Y+0.5*g.cellSize+size/2)
-
-		// Add lines to annotations layer
-		annotationsLayer.Add(line1)
-		annotationsLayer.Add(line2)
 	}
 
 	// Draw Labels (LB)
@@ -1719,7 +1739,7 @@ func (g *Game) initializeGameFromSGFTree(gameTree *SGFGameTree) error {
 				continue
 			}
 			initialBoard[xy[1]][xy[0]] = white
-			g.rootNode.addedWhiteStones = append(g.rootNode.addedWhiteStones, coord)
+			g.rootNode.addWhiteStone(xy[0], xy[1])
 		}
 	}
 
@@ -1743,17 +1763,37 @@ func (g *Game) initializeGameFromSGFTree(gameTree *SGFGameTree) error {
 			return err
 		}
 		// Append annotation properties to root node
-		if len(moveData.CR) > 0 {
-			g.rootNode.CR = append(g.rootNode.CR, moveData.CR...)
+		for _, coord := range moveData.CR {
+			xy := convertSGFCoordToXY(coord)
+			if xy == nil {
+				fmt.Printf("Warning: Invalid CR coordinate '%s' skipped.\n", coord)
+				continue
+			}
+			g.rootNode.CR[xy[1]][xy[0]] = true
 		}
-		if len(moveData.SQ) > 0 {
-			g.rootNode.SQ = append(g.rootNode.SQ, moveData.SQ...)
+		for _, coord := range moveData.SQ {
+			xy := convertSGFCoordToXY(coord)
+			if xy == nil {
+				fmt.Printf("Warning: Invalid CR coordinate '%s' skipped.\n", coord)
+				continue
+			}
+			g.rootNode.SQ[xy[1]][xy[0]] = true
 		}
-		if len(moveData.TR) > 0 {
-			g.rootNode.TR = append(g.rootNode.TR, moveData.TR...)
+		for _, coord := range moveData.TR {
+			xy := convertSGFCoordToXY(coord)
+			if xy == nil {
+				fmt.Printf("Warning: Invalid CR coordinate '%s' skipped.\n", coord)
+				continue
+			}
+			g.rootNode.TR[xy[1]][xy[0]] = true
 		}
-		if len(moveData.MA) > 0 {
-			g.rootNode.MA = append(g.rootNode.MA, moveData.MA...)
+		for _, coord := range moveData.MA {
+			xy := convertSGFCoordToXY(coord)
+			if xy == nil {
+				fmt.Printf("Warning: Invalid CR coordinate '%s' skipped.\n", coord)
+				continue
+			}
+			g.rootNode.MA[xy[1]][xy[0]] = true
 		}
 		if len(moveData.LB) > 0 {
 			for point, label := range moveData.LB {
@@ -2075,11 +2115,11 @@ func (g *Game) processSequence(sequence []*SGFNode, parentNode *GameTreeNode) er
 
 		// Append added white stones
 		if len(moveData.addedWhiteStones) > 0 {
-			newNode.addedWhiteStones = append(newNode.addedWhiteStones, moveData.addedWhiteStones...)
 			for _, coord := range moveData.addedWhiteStones {
 				xy := convertSGFCoordToXY(coord)
 				if xy != nil {
 					newBoardState[xy[1]][xy[0]] = white
+					newNode.addWhiteStone(xy[0], xy[1])
 				}
 			}
 		}
@@ -2106,17 +2146,29 @@ func (g *Game) processSequence(sequence []*SGFNode, parentNode *GameTreeNode) er
 		}
 
 		// Append annotation properties
-		if len(moveData.CR) > 0 {
-			newNode.CR = append(newNode.CR, moveData.CR...)
+		for _, coord := range moveData.CR {
+			xy := convertSGFCoordToXY(coord)
+			if xy[0] >= 0 && xy[1] >= 0 && xy[0] < g.sizeX && xy[1] < g.sizeY {
+				newNode.CR[xy[1]][xy[0]] = true
+			}
 		}
-		if len(moveData.SQ) > 0 {
-			newNode.SQ = append(newNode.SQ, moveData.SQ...)
+		for _, coord := range moveData.SQ {
+			xy := convertSGFCoordToXY(coord)
+			if xy[0] >= 0 && xy[1] >= 0 && xy[0] < g.sizeX && xy[1] < g.sizeY {
+				newNode.SQ[xy[1]][xy[0]] = true
+			}
 		}
-		if len(moveData.TR) > 0 {
-			newNode.TR = append(newNode.TR, moveData.TR...)
+		for _, coord := range moveData.TR {
+			xy := convertSGFCoordToXY(coord)
+			if xy[0] >= 0 && xy[1] >= 0 && xy[0] < g.sizeX && xy[1] < g.sizeY {
+				newNode.TR[xy[1]][xy[0]] = true
+			}
 		}
-		if len(moveData.MA) > 0 {
-			newNode.MA = append(newNode.MA, moveData.MA...)
+		for _, coord := range moveData.MA {
+			xy := convertSGFCoordToXY(coord)
+			if xy[0] >= 0 && xy[1] >= 0 && xy[0] < g.sizeX && xy[1] < g.sizeY {
+				newNode.MA[xy[1]][xy[0]] = true
+			}
 		}
 		if len(moveData.LB) > 0 {
 			for point, label := range moveData.LB {
@@ -2171,9 +2223,6 @@ func generateSGF(node *GameTreeNode, sizeX, sizeY int) string {
 			sgf += fmt.Sprintf("SZ[%d:%d]", sizeX, sizeY)
 		}
 
-		// Collect initial stones
-		whiteStones := node.addedWhiteStones
-
 		// Add initial stones to SGF
 		blackStonesText := "AB"
 		for y, arr := range node.addedBlackStones {
@@ -2187,11 +2236,16 @@ func generateSGF(node *GameTreeNode, sizeX, sizeY int) string {
 			sgf += blackStonesText
 		}
 
-		if len(whiteStones) > 0 {
-			sgf += "AW"
-			for _, coord := range whiteStones {
-				sgf += fmt.Sprintf("[%s]", coord)
+		whiteStonesText := "AW"
+		for y, arr := range node.addedWhiteStones {
+			for x, el := range arr {
+				if el {
+					whiteStonesText += "[" + convertCoordinatesToSGF(x, y) + "]"
+				}
 			}
+		}
+		if whiteStonesText != "AW" {
+			sgf += whiteStonesText
 		}
 
 		// Include comment if present
@@ -2203,30 +2257,54 @@ func generateSGF(node *GameTreeNode, sizeX, sizeY int) string {
 		}
 
 		// Include CR, SQ, TR, MA, LB properties if present
-		if len(node.CR) > 0 {
-			sgf += "CR"
-			for _, coord := range node.CR {
-				sgf += fmt.Sprintf("[%s]", coord)
+		circleText := "CR"
+		for y, arr := range node.CR {
+			for x, el := range arr {
+				if el {
+					circleText += "[" + convertCoordinatesToSGF(x, y) + "]"
+				}
 			}
 		}
-		if len(node.SQ) > 0 {
-			sgf += "SQ"
-			for _, coord := range node.SQ {
-				sgf += fmt.Sprintf("[%s]", coord)
+		if circleText != "CR" {
+			sgf += circleText
+		}
+
+		squareText := "SQ"
+		for y, arr := range node.SQ {
+			for x, el := range arr {
+				if el {
+					squareText += "[" + convertCoordinatesToSGF(x, y) + "]"
+				}
 			}
 		}
-		if len(node.TR) > 0 {
-			sgf += "TR"
-			for _, coord := range node.TR {
-				sgf += fmt.Sprintf("[%s]", coord)
+		if squareText != "SQ" {
+			sgf += squareText
+		}
+
+		triangleText := "TR"
+		for y, arr := range node.TR {
+			for x, el := range arr {
+				if el {
+					triangleText += "[" + convertCoordinatesToSGF(x, y) + "]"
+				}
 			}
 		}
-		if len(node.MA) > 0 {
-			sgf += "MA"
-			for _, coord := range node.MA {
-				sgf += fmt.Sprintf("[%s]", coord)
+		if triangleText != "TR" {
+			sgf += triangleText
+		}
+
+		xMarkText := "MA"
+		for y, arr := range node.MA {
+			for x, el := range arr {
+				if el {
+					xMarkText += "[" + convertCoordinatesToSGF(x, y) + "]"
+				}
 			}
 		}
+		if xMarkText != "MA" {
+			sgf += xMarkText
+		}
+
 		if len(node.LB) > 0 {
 			sgf += "LB"
 			for point, label := range node.LB {
@@ -2257,30 +2335,54 @@ func generateSGF(node *GameTreeNode, sizeX, sizeY int) string {
 		}
 
 		// Include CR, SQ, TR, MA, LB properties if present
-		if len(node.CR) > 0 {
-			sgf += "CR"
-			for _, coord := range node.CR {
-				sgf += fmt.Sprintf("[%s]", coord)
+		circleText := "CR"
+		for y, arr := range node.CR {
+			for x, el := range arr {
+				if el {
+					circleText += "[" + convertCoordinatesToSGF(x, y) + "]"
+				}
 			}
 		}
-		if len(node.SQ) > 0 {
-			sgf += "SQ"
-			for _, coord := range node.SQ {
-				sgf += fmt.Sprintf("[%s]", coord)
+		if circleText != "CR" {
+			sgf += circleText
+		}
+
+		squareText := "SQ"
+		for y, arr := range node.SQ {
+			for x, el := range arr {
+				if el {
+					squareText += "[" + convertCoordinatesToSGF(x, y) + "]"
+				}
 			}
 		}
-		if len(node.TR) > 0 {
-			sgf += "TR"
-			for _, coord := range node.TR {
-				sgf += fmt.Sprintf("[%s]", coord)
+		if squareText != "SQ" {
+			sgf += squareText
+		}
+
+		triangleText := "TR"
+		for y, arr := range node.TR {
+			for x, el := range arr {
+				if el {
+					triangleText += "[" + convertCoordinatesToSGF(x, y) + "]"
+				}
 			}
 		}
-		if len(node.MA) > 0 {
-			sgf += "MA"
-			for _, coord := range node.MA {
-				sgf += fmt.Sprintf("[%s]", coord)
+		if triangleText != "TR" {
+			sgf += triangleText
+		}
+
+		xMarkText := "MA"
+		for y, arr := range node.MA {
+			for x, el := range arr {
+				if el {
+					xMarkText += "[" + convertCoordinatesToSGF(x, y) + "]"
+				}
 			}
 		}
+		if xMarkText != "MA" {
+			sgf += xMarkText
+		}
+
 		if len(node.LB) > 0 {
 			sgf += "LB"
 			for point, label := range node.LB {
@@ -2300,11 +2402,17 @@ func generateSGF(node *GameTreeNode, sizeX, sizeY int) string {
 		if blackStonesText != "AB" {
 			sgf += blackStonesText
 		}
-		if len(node.addedWhiteStones) > 0 {
-			sgf += "AW"
-			for _, coord := range node.addedWhiteStones {
-				sgf += fmt.Sprintf("[%s]", coord)
+
+		whiteStonesText := "AW"
+		for y, arr := range node.addedWhiteStones {
+			for x, el := range arr {
+				if el {
+					whiteStonesText += "[" + convertCoordinatesToSGF(x, y) + "]"
+				}
 			}
+		}
+		if whiteStonesText != "AW" {
+			sgf += whiteStonesText
 		}
 	}
 
