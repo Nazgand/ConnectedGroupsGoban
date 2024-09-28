@@ -3,10 +3,12 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"image/color"
 	"io"
 	"math"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
@@ -47,6 +49,72 @@ var (
 	purpleColor           = color.RGBA{128, 0, 128, 255}
 )
 
+type Config struct {
+	Komi     int    `json:"komi"`
+	GTPPath  string `json:"gtpPath"`
+	GTPArgs  string `json:"gtpArgs"`
+	GTPColor string `json:"gtpColor"`
+}
+
+func (g *Game) loadConfig() error {
+	exePath, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	configPath := filepath.Join(filepath.Dir(exePath), "ConnectedGroupsGoban.config")
+
+	file, err := os.Open(configPath)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	var config Config
+	decoder := json.NewDecoder(file)
+	err = decoder.Decode(&config)
+	if err != nil {
+		return err
+	}
+
+	// Apply the loaded configuration
+	g.komi = config.Komi
+	g.gtpPath = config.GTPPath
+	g.gtpArgs = config.GTPArgs
+	g.gtpColor = config.GTPColor
+
+	return nil
+}
+
+func (g *Game) saveConfig() error {
+	exePath, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	configPath := filepath.Join(filepath.Dir(exePath), "ConnectedGroupsGoban.config")
+
+	config := Config{
+		Komi:     g.komi,
+		GTPPath:  g.gtpPath,
+		GTPArgs:  g.gtpArgs,
+		GTPColor: g.gtpColor,
+	}
+
+	file, err := os.Create(configPath)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	encoder := json.NewEncoder(file)
+	encoder.SetIndent("", "  ") // Pretty print for readability
+	err = encoder.Encode(config)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
 type Game struct {
 	sizeX             int
 	sizeY             int
@@ -65,7 +133,7 @@ type Game struct {
 	territoryLayer    *fyne.Container
 	scoringStatus     *widget.Label
 	commentEntry      *widget.Entry
-	komi              float64
+	komi              int
 	gtpPath           string
 	gtpArgs           string
 	gtpColor          string
@@ -270,6 +338,14 @@ func main() {
 		gtpArgs:   "-g -p 931 --noponder",
 		gtpColor:  "W",
 	}
+
+	// Load configuration
+	err := game.loadConfig()
+	if err != nil {
+		// Handle error (e.g., file not found is acceptable)
+		fmt.Println("Could not load config:", err)
+	}
+
 	w.Canvas().SetOnTypedKey(game.handleKeyEvent)
 
 	// Create scoring status label
@@ -565,12 +641,17 @@ func (g *Game) showSetKomiDialog() {
 	}
 	komiDialog := dialog.NewForm("Set Komi", "OK", "Cancel", formItems, func(ok bool) {
 		if ok {
-			komiValue, err := strconv.ParseFloat(komiEntry.Text, 64)
+			komiValue, err := strconv.Atoi(komiEntry.Text)
 			if err != nil {
 				g.showError(fmt.Errorf("invalid komi value"))
 				return
 			}
 			g.komi = komiValue
+
+			// Save the configuration
+			if err := g.saveConfig(); err != nil {
+				g.showError(fmt.Errorf("failed to save config: %v", err))
+			}
 
 			// If engine is attached, send komi command
 			if g.gtpCmd != nil {
@@ -636,6 +717,11 @@ func (g *Game) showEngineSettings() {
 			g.gtpPath = gtpPathEntry.Text
 			g.gtpArgs = gtpArgsEntry.Text
 			g.gtpColor = gtpColorEntry.Selected
+
+			// Save the configuration
+			if err := g.saveConfig(); err != nil {
+				g.showError(fmt.Errorf("failed to save config: %v", err))
+			}
 		}
 	}, g.window)
 	settingsDialog.Show()
@@ -1127,9 +1213,9 @@ func (g *Game) assignTerritoryToEmptyRegions() {
 	}
 }
 
-func (g *Game) calculateScore() (float64, float64) {
-	blackScore := 0.0
-	whiteScore := 0.0
+func (g *Game) calculateScore() (int, int) {
+	blackScore := 0
+	whiteScore := 0
 	for y := 0; y < g.sizeY; y++ {
 		for x := 0; x < g.sizeX; x++ {
 			owner := g.territoryMap[y][x]
@@ -2093,7 +2179,7 @@ func (g *Game) importFromSGF(sgfContent string) error {
 }
 
 func (g *Game) exportToSGF() (string, error) {
-	sgfContent := generateSGF(g.rootNode, g.sizeX, g.sizeY)
+	sgfContent := generateSGF(g.rootNode, g.sizeX, g.sizeY, g.komi)
 	return sgfContent, nil
 }
 
@@ -2345,6 +2431,21 @@ func (g *Game) initializeGameFromSGFTree(gameTree *SGFGameTree) error {
 		return fmt.Errorf("SGF game tree has no nodes")
 	}
 	rootNodeProperties := gameTree.sequence[0].properties
+
+	// Adjust the komi based on KM property
+	if kmProp, hasKM := rootNodeProperties["KM"]; hasKM && len(kmProp) > 0 {
+		komiValue, err := strconv.Atoi(kmProp[0])
+		if err != nil {
+			return fmt.Errorf("invalid KM property: %s", kmProp[0])
+		}
+		g.komi = komiValue
+
+		// Save the configuration
+		if err := g.saveConfig(); err != nil {
+			g.showError(fmt.Errorf("failed to save config: %v", err))
+		}
+	}
+
 	// Adjust the board size based on SZ property
 	sizeProp, hasSZ := rootNodeProperties["SZ"]
 	if hasSZ && len(sizeProp) > 0 {
@@ -2912,7 +3013,7 @@ func convertCoordinatesToSGF(x, y int) string {
 }
 
 // Helper function to format SGF properties for a node
-func formatNodeProperties(node *GameTreeNode, isRoot bool, sizeX, sizeY int) string {
+func formatNodeProperties(node *GameTreeNode, isRoot bool, sizeX, sizeY int, komi int) string {
 	sgf := ";"
 
 	if isRoot {
@@ -2925,6 +3026,7 @@ func formatNodeProperties(node *GameTreeNode, isRoot bool, sizeX, sizeY int) str
 		} else {
 			sgf += fmt.Sprintf("SZ[%d:%d]", sizeX, sizeY)
 		}
+		sgf += fmt.Sprintf("KM[%.1f]", komi) // Include komi
 	}
 
 	if !isRoot && node.move[0] >= 0 && node.move[0] < sizeX && node.move[1] >= 0 && node.move[1] < sizeY {
@@ -3060,23 +3162,23 @@ func formatAddedStones(node *GameTreeNode) string {
 	return addedStones
 }
 
-func generateSGF(node *GameTreeNode, sizeX, sizeY int) string {
+func generateSGF(node *GameTreeNode, sizeX, sizeY int, komi int) string {
 	sgf := "(" // Start of variation
 
 	// Add the properties for the current node
-	sgf += formatNodeProperties(node, node.parent == nil, sizeX, sizeY)
+	sgf += formatNodeProperties(node, node.parent == nil, sizeX, sizeY, komi)
 
 	// Recursively generate SGF for child nodes (variations)
 	if len(node.children) > 0 {
 		if len(node.children) == 1 {
 			// Continue the main line without starting a new variation
-			childSGF := generateSGF(node.children[0], sizeX, sizeY)
+			childSGF := generateSGF(node.children[0], sizeX, sizeY, komi)
 			childSGF = childSGF[1 : len(childSGF)-1] // Remove outer parentheses to nest within the current variation
 			sgf += childSGF
 		} else {
 			// Multiple variations; each variation is enclosed in parentheses
 			for _, child := range node.children {
-				sgf += generateSGF(child, sizeX, sizeY)
+				sgf += generateSGF(child, sizeX, sizeY, komi)
 			}
 		}
 	}
