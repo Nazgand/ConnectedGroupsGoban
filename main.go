@@ -241,8 +241,9 @@ func main() {
 	a := app.NewWithID("com.nazgand.connectedgroupsgoban")
 	w := a.NewWindow("Connected Groups Goban Version " + version)
 	game := &Game{
-		window:  w,
-		nodeMap: make(map[string]*GameTreeNode),
+		window:    w,
+		mouseMode: "play",
+		nodeMap:   make(map[string]*GameTreeNode),
 	}
 
 	// Create scoring status label
@@ -381,10 +382,24 @@ func main() {
 		}),
 	)
 
-	// Create the main menu and set it to the window
+	// Define the "MouseMode" menu
+	mouseModeMenu := fyne.NewMenu("MouseMode",
+		fyne.NewMenuItem("Play", func() { game.setMouseMode("play") }),
+		fyne.NewMenuItem("Score", func() { game.setMouseMode("score") }),
+		fyne.NewMenuItem("Set Label", func() { game.setMouseMode("label") }),
+		fyne.NewMenuItem("Add Black", func() { game.setMouseMode("addBlack") }),
+		fyne.NewMenuItem("Add White", func() { game.setMouseMode("addWhite") }),
+		fyne.NewMenuItem("Toggle Circle", func() { game.setMouseMode("circle") }),
+		fyne.NewMenuItem("Toggle Square", func() { game.setMouseMode("square") }),
+		fyne.NewMenuItem("Toggle Triangle", func() { game.setMouseMode("triangle") }),
+		fyne.NewMenuItem("Toggle X Mark", func() { game.setMouseMode("xMark") }),
+	)
+
+	// Update the main menu to include the new "MouseMode" menu
 	mainMenu := fyne.NewMainMenu(
 		fileMenu,
 		gameMenu,
+		mouseModeMenu,
 	)
 	w.SetMainMenu(mainMenu)
 
@@ -1131,6 +1146,20 @@ func (g *Game) handleMouseMove(ev *desktop.MouseEvent) {
 	g.gridContainer.Refresh()
 }
 
+func (g *Game) setMouseMode(mode string) {
+	if g.mouseMode == mode {
+		return
+	}
+	if g.mouseMode == "score" && mode != "score" {
+		g.exitScoringMode()
+	}
+	if mode == "score" && g.mouseMode != "score" {
+		g.enterScoringMode()
+	} else {
+		g.mouseMode = mode
+	}
+}
+
 // Handles mouse click events to place stones or toggle group status in scoring mode.
 func (g *Game) handleMouseClick(ev *fyne.PointEvent) {
 	x, y, ok := g.pixelToBoardCoords(ev.Position)
@@ -1138,45 +1167,85 @@ func (g *Game) handleMouseClick(ev *fyne.PointEvent) {
 		return // Click outside the board
 	}
 
-	if g.mouseMode == "score" {
+	switch g.mouseMode {
+	case "play":
+		if g.currentNode.boardState[y][x] != empty {
+			return
+		}
+		player := switchPlayer(g.currentNode.player)
+		if !g.isMoveLegal(x, y, player) {
+			return
+		}
+		boardCopy := copyBoard(g.currentNode.boardState)
+		boardCopy[y][x] = player
+		koX, koY := g.captureStones(boardCopy, x, y, player)
+		newNode := g.newGameTreeNode()
+		newNode.boardState = boardCopy
+		newNode.move = [2]int{x, y}
+		newNode.player = player
+		newNode.parent = g.currentNode
+		newNode.koX = koX
+		newNode.koY = koY
+		g.currentNode.children = append(g.currentNode.children, newNode)
+		g.currentNode = newNode
+		g.updateCommentTextbox()
+		g.updateGameTreeUI()
+		g.redrawBoard()
+	case "score":
 		g.toggleGroupStatus(x, y)
 		g.assignTerritoryToEmptyRegions()
 		g.redrawBoard()
 		g.calculateAndDisplayScore()
-		return
+	case "label":
+		// Open a textbox popup to set or remove the label of the vertex
+		entry := widget.NewEntry()
+		if existingLabel := g.currentNode.LB[y][x]; existingLabel != "" {
+			entry.SetText(existingLabel)
+		}
+		entry.SetPlaceHolder("Enter label (leave empty to remove)")
+		entryDialog := dialog.NewForm("Set Label", "OK", "Cancel",
+			[]*widget.FormItem{widget.NewFormItem("Label", entry)},
+			func(ok bool) {
+				if ok {
+					label := entry.Text
+					g.currentNode.LB[y][x] = label
+					g.redrawBoard()
+				}
+			}, g.window)
+		entryDialog.Show()
+	case "addBlack":
+		if g.currentNode.boardState[y][x] != black {
+			g.currentNode.boardState[y][x] = black
+			g.currentNode.addedBlackStones[y][x] = true
+			g.currentNode.addedWhiteStones[y][x] = false
+			g.redrawBoard()
+		}
+	case "addWhite":
+		if g.currentNode.boardState[y][x] != white {
+			g.currentNode.boardState[y][x] = white
+			g.currentNode.addedWhiteStones[y][x] = true
+			g.currentNode.addedBlackStones[y][x] = false
+			g.redrawBoard()
+		}
+	case "circle":
+		// Toggle CR[y][x]
+		g.currentNode.CR[y][x] = !g.currentNode.CR[y][x]
+		g.redrawBoard()
+	case "square":
+		// Toggle SQ[y][x]
+		g.currentNode.SQ[y][x] = !g.currentNode.SQ[y][x]
+		g.redrawBoard()
+	case "triangle":
+		// Toggle TR[y][x]
+		g.currentNode.TR[y][x] = !g.currentNode.TR[y][x]
+		g.redrawBoard()
+	case "xMark":
+		// Toggle MA[y][x]
+		g.currentNode.MA[y][x] = !g.currentNode.MA[y][x]
+		g.redrawBoard()
+	default:
+		// Do nothing or handle other modes
 	}
-
-	if g.currentNode.boardState[y][x] != empty {
-		return
-	}
-
-	player := switchPlayer(g.currentNode.player)
-
-	if !g.isMoveLegal(x, y, player) {
-		return
-	}
-
-	boardCopy := copyBoard(g.currentNode.boardState)
-	boardCopy[y][x] = player
-	koX, koY := g.captureStones(boardCopy, x, y, player)
-	newNode := g.newGameTreeNode()
-	newNode.boardState = boardCopy
-	newNode.move = [2]int{x, y}
-	newNode.player = player // Set the player who made the move
-	newNode.parent = g.currentNode
-	newNode.koX = koX
-	newNode.koY = koY
-	g.currentNode.children = append(g.currentNode.children, newNode)
-	g.currentNode = newNode
-
-	// Update the comment textbox
-	g.updateCommentTextbox()
-
-	// Refresh the game tree UI
-	g.updateGameTreeUI()
-
-	// Redraw the board to display the new stone and any captures
-	g.redrawBoard()
 }
 
 func (g *Game) isMoveLegal(x, y int, player string) bool {
