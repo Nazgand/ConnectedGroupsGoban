@@ -71,6 +71,7 @@ func (g *Game) newGameTreeNode() *GameTreeNode {
 		koY:              -1,
 		addedBlackStones: make([][]bool, g.sizeY),
 		addedWhiteStones: make([][]bool, g.sizeY),
+		AE:               make([][]bool, g.sizeY),
 		CR:               make([][]bool, g.sizeY),
 		SQ:               make([][]bool, g.sizeY),
 		TR:               make([][]bool, g.sizeY),
@@ -81,6 +82,7 @@ func (g *Game) newGameTreeNode() *GameTreeNode {
 	for y := 0; y < g.sizeY; y++ {
 		newNode.addedBlackStones[y] = make([]bool, g.sizeX)
 		newNode.addedWhiteStones[y] = make([]bool, g.sizeX)
+		newNode.AE[y] = make([]bool, g.sizeX)
 		newNode.CR[y] = make([]bool, g.sizeX)
 		newNode.SQ[y] = make([]bool, g.sizeX)
 		newNode.TR[y] = make([]bool, g.sizeX)
@@ -104,6 +106,7 @@ type GameTreeNode struct {
 	Comment          string          // Optional comment for the move
 	addedBlackStones [][]bool        // Coordinates of additional Black stones (AB properties)
 	addedWhiteStones [][]bool        // Coordinates of additional White stones (AW properties)
+	AE               [][]bool        // Coordinates of points made empty (AE properties)
 	CR               [][]bool        // Coordinates for circle annotations
 	SQ               [][]bool        // Coordinates for square annotations
 	TR               [][]bool        // Coordinates for triangle annotations
@@ -276,7 +279,7 @@ func main() {
 
 	// Initialize the board here
 	game.initializeBoard()
-	game.drawBoard()
+	game.redrawBoard()
 
 	// Initialize the game tree
 	game.gameTreeContainer = container.NewScroll(nil)
@@ -360,7 +363,7 @@ func main() {
 					game.sizeX = x
 					game.sizeY = y
 					game.initializeBoard()
-					game.drawBoard()
+					game.redrawBoard()
 					game.updateGameTreeUI() // Refresh the game tree UI
 				},
 				game.window,
@@ -377,9 +380,6 @@ func main() {
 		fyne.NewMenuItem("Pass", func() {
 			game.handlePass()
 		}),
-		fyne.NewMenuItem("Toggle Scoring Mode", func() {
-			game.toggleScoringMode()
-		}),
 	)
 
 	// Define the "MouseMode" menu
@@ -389,6 +389,7 @@ func main() {
 		fyne.NewMenuItem("Set Label", func() { game.setMouseMode("label") }),
 		fyne.NewMenuItem("Add Black", func() { game.setMouseMode("addBlack") }),
 		fyne.NewMenuItem("Add White", func() { game.setMouseMode("addWhite") }),
+		fyne.NewMenuItem("Add Empty", func() { game.setMouseMode("addEmpty") }),
 		fyne.NewMenuItem("Toggle Circle", func() { game.setMouseMode("circle") }),
 		fyne.NewMenuItem("Toggle Square", func() { game.setMouseMode("square") }),
 		fyne.NewMenuItem("Toggle Triangle", func() { game.setMouseMode("triangle") }),
@@ -438,29 +439,14 @@ func (g *Game) updateCommentTextbox() {
 	}
 }
 
-func (g *Game) toggleScoringMode() {
-	if g.mouseMode == "score" {
-		g.exitScoringMode()
-	} else {
-		g.enterScoringMode()
-	}
-}
-
 func (g *Game) enterScoringMode() {
-	g.mouseMode = "score"
 	g.initializeTerritoryMap()
 	g.assignTerritoryToEmptyRegions()
 	g.redrawBoard()
 	g.calculateAndDisplayScore()
-	// Hide the hoverStone
-	if g.hoverStone != nil {
-		g.gridContainer.Remove(g.hoverStone)
-		g.hoverStone = nil
-	}
 }
 
 func (g *Game) exitScoringMode() {
-	g.mouseMode = "play"
 	// Remove territory markers
 	if g.territoryLayer != nil {
 		g.gridContainer.Remove(g.territoryLayer)
@@ -699,11 +685,6 @@ func copyBoard(board [][]string) [][]string {
 func (g *Game) setCurrentNode(node *GameTreeNode) {
 	g.currentNode = node
 	g.updateCommentTextbox()
-}
-
-func (g *Game) drawBoard() {
-	g.hoverStone = nil
-	g.redrawBoard()
 }
 
 func (g *Game) redrawBoard() {
@@ -1100,7 +1081,7 @@ func (g *Game) boardCoordsToPixel(x, y int) fyne.Position {
 
 // Handles mouse movement events to display a hover stone when applicable.
 func (g *Game) handleMouseMove(ev *desktop.MouseEvent) {
-	if g.mouseMode == "score" {
+	if g.mouseMode != "play" {
 		if g.hoverStone != nil {
 			g.gridContainer.Remove(g.hoverStone)
 			g.hoverStone = nil
@@ -1155,9 +1136,8 @@ func (g *Game) setMouseMode(mode string) {
 	}
 	if mode == "score" && g.mouseMode != "score" {
 		g.enterScoringMode()
-	} else {
-		g.mouseMode = mode
 	}
+	g.mouseMode = mode
 }
 
 // Handles mouse click events to place stones or toggle group status in scoring mode.
@@ -1218,6 +1198,7 @@ func (g *Game) handleMouseClick(ev *fyne.PointEvent) {
 			g.currentNode.boardState[y][x] = black
 			g.currentNode.addedBlackStones[y][x] = true
 			g.currentNode.addedWhiteStones[y][x] = false
+			g.currentNode.AE[y][x] = false
 			g.redrawBoard()
 		}
 	case "addWhite":
@@ -1225,6 +1206,15 @@ func (g *Game) handleMouseClick(ev *fyne.PointEvent) {
 			g.currentNode.boardState[y][x] = white
 			g.currentNode.addedWhiteStones[y][x] = true
 			g.currentNode.addedBlackStones[y][x] = false
+			g.currentNode.AE[y][x] = false
+			g.redrawBoard()
+		}
+	case "addEmpty":
+		if g.currentNode.boardState[y][x] != empty {
+			g.currentNode.boardState[y][x] = empty
+			g.currentNode.AE[y][x] = true
+			g.currentNode.addedBlackStones[y][x] = false
+			g.currentNode.addedWhiteStones[y][x] = false
 			g.redrawBoard()
 		}
 	case "circle":
@@ -1900,23 +1890,6 @@ func (g *Game) processMainLine(gameTree *SGFGameTree, parentNode *GameTreeNode, 
 		}
 		currentParent.children = append(currentParent.children, newNode)
 
-		// Apply added black stones
-		for _, coord := range moveData.addedBlackStones {
-			xy := convertSGFCoordToXY(coord)
-			if xy != nil {
-				newBoardState[xy[1]][xy[0]] = black
-				newNode.addBlackStone(xy[0], xy[1])
-			}
-		}
-
-		// Apply added white stones
-		for _, coord := range moveData.addedWhiteStones {
-			xy := convertSGFCoordToXY(coord)
-			if xy != nil {
-				newBoardState[xy[1]][xy[0]] = white
-			}
-		}
-
 		// Handle move
 		if moveData.move != nil {
 			x, y := moveData.move.x, moveData.move.y
@@ -1936,6 +1909,34 @@ func (g *Game) processMainLine(gameTree *SGFGameTree, parentNode *GameTreeNode, 
 		} else {
 			// No move
 			newNode.move = [2]int{93, 93}
+		}
+
+		// Apply added black stones
+		for _, coord := range moveData.addedBlackStones {
+			xy := convertSGFCoordToXY(coord)
+			if xy != nil {
+				newBoardState[xy[1]][xy[0]] = black
+				newNode.addBlackStone(xy[0], xy[1])
+			}
+		}
+
+		// Apply added white stones
+		for _, coord := range moveData.addedWhiteStones {
+			xy := convertSGFCoordToXY(coord)
+			if xy != nil {
+				newBoardState[xy[1]][xy[0]] = white
+			}
+		}
+
+		// Append added empty points
+		if len(moveData.addedEmptyPoints) > 0 {
+			for _, coord := range moveData.addedEmptyPoints {
+				xy := convertSGFCoordToXY(coord)
+				if xy != nil {
+					newBoardState[xy[1]][xy[0]] = empty
+					newNode.AE[xy[1]][xy[0]] = true
+				}
+			}
 		}
 
 		// Assign comment to the new node if present
@@ -1967,6 +1968,7 @@ type MoveData struct {
 	pass             bool              // Indicates if the move is a pass
 	addedBlackStones []string          // Coordinates for additional Black stones (AB)
 	addedWhiteStones []string          // Coordinates for additional White stones (AW)
+	addedEmptyPoints []string          // Coordinates for making points empty (AE)
 	CR               []string          // Circle annotations
 	SQ               []string          // Square annotations
 	TR               []string          // Triangle annotations
@@ -1988,6 +1990,7 @@ func extractMoveFromNode(nodeProperties map[string][]string) (*MoveData, error) 
 	var player string = ""
 	var addedBlackStones []string
 	var addedWhiteStones []string
+	var addedEmptyPoints []string
 	var CR []string
 	var SQ []string
 	var TR []string
@@ -2022,6 +2025,11 @@ func extractMoveFromNode(nodeProperties map[string][]string) (*MoveData, error) 
 	// Handle Add White Stones
 	if awProps, hasAW := nodeProperties["AW"]; hasAW {
 		addedWhiteStones = append(addedWhiteStones, awProps...)
+	}
+
+	// Handle Add Empty Points (AE)
+	if aeProps, hasAE := nodeProperties["AE"]; hasAE {
+		addedEmptyPoints = append(addedEmptyPoints, aeProps...)
 	}
 
 	// Handle CR (Circle) properties
@@ -2060,6 +2068,7 @@ func extractMoveFromNode(nodeProperties map[string][]string) (*MoveData, error) 
 		pass:             move != nil && move.x == -1 && move.y == -1,
 		addedBlackStones: addedBlackStones,
 		addedWhiteStones: addedWhiteStones,
+		addedEmptyPoints: addedEmptyPoints,
 		CR:               CR,
 		SQ:               SQ,
 		TR:               TR,
@@ -2125,6 +2134,27 @@ func (g *Game) processSequence(sequence []*SGFNode, parentNode *GameTreeNode) er
 		}
 		currentParent.children = append(currentParent.children, newNode)
 
+		// Handle move
+		if moveData.move != nil {
+			x, y := moveData.move.x, moveData.move.y
+			player := moveData.move.player
+			if x >= 0 && y >= 0 {
+				// Place the stone
+				newBoardState[y][x] = player
+				// Capture stones and handle ko
+				koX, koY := g.captureStones(newBoardState, x, y, player)
+				newNode.koX = koX
+				newNode.koY = koY
+				newNode.move = [2]int{x, y}
+			} else {
+				// Pass move
+				newNode.move = [2]int{-1, -1}
+			}
+		} else {
+			// No move
+			newNode.move = [2]int{93, 93} // Arbitrary invalid coordinates
+		}
+
 		// Append added black stones
 		if len(moveData.addedBlackStones) > 0 {
 			for _, coord := range moveData.addedBlackStones {
@@ -2147,25 +2177,15 @@ func (g *Game) processSequence(sequence []*SGFNode, parentNode *GameTreeNode) er
 			}
 		}
 
-		// Handle move
-		if moveData.move != nil {
-			x, y := moveData.move.x, moveData.move.y
-			player := moveData.move.player
-			if x >= 0 && y >= 0 {
-				// Place the stone
-				newBoardState[y][x] = player
-				// Capture stones and handle ko
-				koX, koY := g.captureStones(newBoardState, x, y, player)
-				newNode.koX = koX
-				newNode.koY = koY
-				newNode.move = [2]int{x, y}
-			} else {
-				// Pass move
-				newNode.move = [2]int{-1, -1}
+		// Append added empty points
+		if len(moveData.addedEmptyPoints) > 0 {
+			for _, coord := range moveData.addedEmptyPoints {
+				xy := convertSGFCoordToXY(coord)
+				if xy != nil {
+					newBoardState[xy[1]][xy[0]] = empty
+					newNode.AE[xy[1]][xy[0]] = true
+				}
 			}
-		} else {
-			// No move
-			newNode.move = [2]int{93, 93} // Arbitrary invalid coordinates
 		}
 
 		// Append annotation properties
@@ -2360,6 +2380,19 @@ func formatAddedStones(node *GameTreeNode) string {
 	}
 	if whiteStonesText != "AW" {
 		addedStones += whiteStonesText
+	}
+
+	// Add this code to handle AE properties
+	emptyPointsText := "AE"
+	for y, arr := range node.AE {
+		for x, el := range arr {
+			if el {
+				emptyPointsText += "[" + convertCoordinatesToSGF(x, y) + "]"
+			}
+		}
+	}
+	if emptyPointsText != "AE" {
+		addedStones += emptyPointsText
 	}
 
 	return addedStones
