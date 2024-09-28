@@ -43,6 +43,7 @@ var (
 	transparentWhiteColor = color.NRGBA{255, 255, 255, 128}
 	transparentBlackColor = color.NRGBA{0, 0, 0, 128}
 	redColor              = color.RGBA{255, 0, 0, 255}
+	purpleColor           = color.RGBA{128, 0, 128, 255}
 )
 
 type Game struct {
@@ -311,12 +312,12 @@ func main() {
 				defer reader.Close()
 				sgfContent, err := io.ReadAll(reader)
 				if err != nil {
-					dialog.ShowError(err, game.window)
+					game.showError(err)
 					return
 				}
 				err = game.importFromSGF(string(sgfContent))
 				if err != nil {
-					dialog.ShowError(err, game.window)
+					game.showError(err)
 					return
 				}
 				game.gameTreeContainer.ScrollToBottom()
@@ -330,12 +331,12 @@ func main() {
 				defer writer.Close()
 				sgfContent, err := game.exportToSGF()
 				if err != nil {
-					dialog.ShowError(err, game.window)
+					game.showError(err)
 					return
 				}
 				_, err = writer.Write([]byte(sgfContent))
 				if err != nil {
-					dialog.ShowError(err, game.window)
+					game.showError(err)
 					return
 				}
 			}, game.window)
@@ -373,7 +374,7 @@ func main() {
 					x, errX := strconv.Atoi(widthStr)
 					y, errY := strconv.Atoi(heightStr)
 					if errX != nil || errY != nil || x < 1 || y < 1 || x > 52 || y > 52 {
-						dialog.ShowError(fmt.Errorf("invalid board size (must be between 1 and 52)"), game.window)
+						game.showError(fmt.Errorf("invalid board size (must be between 1 and 52)"))
 						return
 					}
 					game.sizeX = x
@@ -480,7 +481,7 @@ func (g *Game) showSetKomiDialog() {
 		if ok {
 			komiValue, err := strconv.ParseFloat(komiEntry.Text, 64)
 			if err != nil {
-				dialog.ShowError(fmt.Errorf("invalid komi value"), g.window)
+				g.showError(fmt.Errorf("invalid komi value"))
 				return
 			}
 			g.komi = komiValue
@@ -489,7 +490,7 @@ func (g *Game) showSetKomiDialog() {
 			if g.gtpCmd != nil {
 				_, err := g.sendGTPCommand(fmt.Sprintf("komi %.1f", g.komi))
 				if err != nil {
-					dialog.ShowError(err, g.window)
+					g.showError(err)
 				}
 			}
 
@@ -593,18 +594,18 @@ func (g *Game) attachEngine() {
 	var err error
 	g.gtpIn, err = g.gtpCmd.StdinPipe()
 	if err != nil {
-		dialog.ShowError(err, g.window)
+		g.showError(err)
 		return
 	}
 
 	g.gtpOut, err = g.gtpCmd.StdoutPipe()
 	if err != nil {
-		dialog.ShowError(err, g.window)
+		g.showError(err)
 		return
 	}
 
 	if err := g.gtpCmd.Start(); err != nil {
-		dialog.ShowError(err, g.window)
+		g.showError(err)
 		return
 	}
 
@@ -612,7 +613,7 @@ func (g *Game) attachEngine() {
 
 	// Initialize the engine
 	if err := g.initializeEngine(); err != nil {
-		dialog.ShowError(err, g.window)
+		g.showError(err)
 		g.detachEngine()
 	} else {
 		dialog.ShowInformation("Engine Attached", "Successfully attached to the engine.", g.window)
@@ -624,14 +625,14 @@ func (g *Game) detachEngine() {
 		// Kill the engine process
 		err := g.gtpCmd.Process.Kill()
 		if err != nil {
-			dialog.ShowError(fmt.Errorf("failed to kill engine process: %v", err), g.window)
+			g.showError(fmt.Errorf("failed to kill engine process: %v", err))
 		}
 
 		// Close stdin pipe
 		if g.gtpIn != nil {
 			err := g.gtpIn.Close()
 			if err != nil {
-				dialog.ShowError(fmt.Errorf("failed to close engine stdin: %v", err), g.window)
+				g.showError(fmt.Errorf("failed to close engine stdin: %v", err))
 			}
 			g.gtpIn = nil
 		}
@@ -640,7 +641,7 @@ func (g *Game) detachEngine() {
 		if g.gtpOut != nil {
 			err := g.gtpOut.Close()
 			if err != nil {
-				dialog.ShowError(fmt.Errorf("failed to close engine stdout: %v", err), g.window)
+				g.showError(fmt.Errorf("failed to close engine stdout: %v", err))
 			}
 			g.gtpOut = nil
 		}
@@ -648,7 +649,7 @@ func (g *Game) detachEngine() {
 		// Wait for the process to exit
 		err = g.gtpCmd.Wait()
 		if err != nil && !strings.Contains(err.Error(), "killed") {
-			dialog.ShowError(fmt.Errorf("error while waiting for engine process to exit: %v", err), g.window)
+			g.showError(fmt.Errorf("error while waiting for engine process to exit: %v", err))
 		}
 
 		// Set engine-related variables to nil
@@ -806,12 +807,12 @@ func (g *Game) handleEngineMove(coord string) {
 	}
 	x, y, err := g.gtpToClientCoords(coord)
 	if err != nil {
-		dialog.ShowError(err, g.window)
+		g.showError(err)
 		return
 	}
 	player := switchPlayer(g.currentNode.player)
 	if !g.isMoveLegal(x, y, player) {
-		dialog.ShowError(fmt.Errorf("engine played an illegal move"), g.window)
+		g.showError(fmt.Errorf("engine played an illegal move"))
 		return
 	}
 	boardCopy := copyBoard(g.currentNode.boardState)
@@ -1039,7 +1040,7 @@ func (g *Game) buildGameTreeUI(node *GameTreeNode) fyne.CanvasObject {
 			// Update engine board state
 			err := g.updateEngineBoardState()
 			if err != nil {
-				dialog.ShowError(err, g.window)
+				g.showError(err)
 				g.detachEngine()
 			}
 		}
@@ -1055,6 +1056,11 @@ func (g *Game) buildGameTreeUI(node *GameTreeNode) fyne.CanvasObject {
 	}
 	childrenContainer := container.NewHBox(childUIs...)
 	return container.NewVBox(nodeButton, childrenContainer)
+}
+
+func (g *Game) showError(err error) {
+	fmt.Printf("Error: %v\n", err)
+	dialog.ShowError(err, g.window)
 }
 
 func makeEmptyBoard(sizeX, sizeY int) [][]string {
@@ -1076,10 +1082,7 @@ func (g *Game) initializeBoard() {
 	g.currentNode = rootNode
 	g.nodeMap = make(map[string]*GameTreeNode)
 	g.nodeMap[rootNode.id] = rootNode
-	if g.mouseMode == "score" {
-		g.exitScoringMode()
-	}
-
+	g.setMouseMode("play")
 	g.updateCommentTextbox()
 }
 
@@ -1097,10 +1100,29 @@ func (g *Game) setCurrentNode(node *GameTreeNode) {
 	g.updateCommentTextbox()
 }
 
+func (g *Game) drawLastMoveHighlight() {
+	if g.currentNode.parent == nil {
+		return
+	}
+	x := g.currentNode.move[0]
+	y := g.currentNode.move[1]
+	if x >= 0 && x < g.sizeX && y >= 0 && y < g.sizeY {
+		// Draw the highlight
+		circle := canvas.NewCircle(purpleColor)
+		circle.StrokeWidth = 0
+		circle.Resize(fyne.NewSize(g.cellSize*0.319, g.cellSize*0.319))
+		pos := g.boardCoordsToPixel(x, y)
+		circle.Move(fyne.Position{
+			X: pos.X + 0.5*g.cellSize - circle.Size().Width/2,
+			Y: pos.Y + 0.5*g.cellSize - circle.Size().Height/2,
+		})
+		g.gridContainer.Add(circle)
+	}
+}
+
 func (g *Game) redrawBoard() {
 	// Clear previous grid lines, stones, and annotations
 	g.gridContainer.Objects = nil
-	g.gridContainer.Hide()
 
 	// Remove existing territory layer if present
 	if g.territoryLayer != nil {
@@ -1116,6 +1138,7 @@ func (g *Game) redrawBoard() {
 	g.drawStoneConnections()
 	g.drawStones()
 	g.drawAnnotations()
+	g.drawLastMoveHighlight()
 
 	// Draw territory markers if in scoring mode
 	if g.mouseMode == "score" {
@@ -1123,7 +1146,6 @@ func (g *Game) redrawBoard() {
 	}
 
 	// Show and refresh the grid container to render all added objects
-	g.gridContainer.Show()
 	g.gridContainer.Refresh()
 }
 
@@ -1603,13 +1625,13 @@ func (g *Game) handleMouseClick(ev *fyne.PointEvent) {
 			// Send move to engine
 			coord := g.clientToGTPCoords(x, y)
 			if _, err := g.sendGTPCommand(fmt.Sprintf("play %s %s", player, coord)); err != nil {
-				dialog.ShowError(err, g.window)
+				g.showError(err)
 				g.detachEngine()
 			} else {
 				// Get engine's response move
 				engineMove, err := g.sendGTPCommand(fmt.Sprintf("genmove %s", switchPlayer(player)))
 				if err != nil {
-					dialog.ShowError(err, g.window)
+					g.showError(err)
 					g.detachEngine()
 				} else {
 					g.handleEngineMove(engineMove)
@@ -1873,6 +1895,7 @@ func switchPlayer(player string) string {
 }
 
 func (g *Game) importFromSGF(sgfContent string) error {
+	g.setMouseMode("play")
 	collection, err := parseSGF(sgfContent)
 	if err != nil {
 		return err
@@ -2885,13 +2908,13 @@ func (g *Game) handlePass() {
 	if g.gtpCmd != nil {
 		player := newNode.player
 		if _, err := g.sendGTPCommand(fmt.Sprintf("play %s pass", player)); err != nil {
-			dialog.ShowError(err, g.window)
+			g.showError(err)
 			g.detachEngine()
 		} else {
 			// Get engine's response move
 			engineMove, err := g.sendGTPCommand(fmt.Sprintf("genmove %s", switchPlayer(player)))
 			if err != nil {
-				dialog.ShowError(err, g.window)
+				g.showError(err)
 				g.detachEngine()
 			} else {
 				if engineMove == "pass" {
