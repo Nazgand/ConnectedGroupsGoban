@@ -1,10 +1,12 @@
 package main
 
 import (
+	"bufio"
 	"fmt"
 	"image/color"
 	"io"
 	"math"
+	"os/exec"
 	"strconv"
 	"strings"
 	"sync"
@@ -59,6 +61,14 @@ type Game struct {
 	territoryLayer    *fyne.Container
 	scoringStatus     *widget.Label
 	commentEntry      *widget.Entry
+	komi              float64
+	gtpPath           string
+	gtpArgs           string
+	gtpColor          string
+	gtpCmd            *exec.Cmd
+	gtpIn             io.WriteCloser
+	gtpOut            io.ReadCloser
+	gtpReader         *bufio.Reader
 }
 
 func (g *Game) newGameTreeNode() *GameTreeNode {
@@ -247,6 +257,10 @@ func main() {
 		window:    w,
 		mouseMode: "play",
 		nodeMap:   make(map[string]*GameTreeNode),
+		komi:      7.0,
+		gtpPath:   "/usr/games/gnugo",
+		gtpArgs:   "--mode gtp --level 15 --large-scale --cache-size 93 --chinese-rules --komi 7",
+		gtpColor:  "B",
 	}
 
 	// Create scoring status label
@@ -380,6 +394,9 @@ func main() {
 		fyne.NewMenuItem("Pass", func() {
 			game.handlePass()
 		}),
+		fyne.NewMenuItem("Set Komi", func() {
+			game.showSetKomiDialog()
+		}),
 	)
 
 	// Define the "MouseMode" menu
@@ -396,11 +413,25 @@ func main() {
 		fyne.NewMenuItem("Toggle X Mark", func() { game.setMouseMode("xMark") }),
 	)
 
-	// Update the main menu to include the new "MouseMode" menu
+	// Define the "Engine" menu
+	engineMenu := fyne.NewMenu("Engine",
+		fyne.NewMenuItem("Settings", func() {
+			game.showEngineSettings()
+		}),
+		fyne.NewMenuItem("Attach Engine", func() {
+			game.attachEngine()
+		}),
+		fyne.NewMenuItem("Detach Engine", func() {
+			game.detachEngine()
+		}),
+	)
+
+	// Update the main menu to include the new "Engine" menu
 	mainMenu := fyne.NewMainMenu(
 		fileMenu,
 		gameMenu,
 		mouseModeMenu,
+		engineMenu, // Add Engine menu here
 	)
 	w.SetMainMenu(mainMenu)
 
@@ -429,6 +460,317 @@ func main() {
 	w.Show()
 
 	a.Run()
+}
+
+func (g *Game) showSetKomiDialog() {
+	komiEntry := widget.NewEntry()
+	komiEntry.SetText(fmt.Sprintf("%.1f", g.komi))
+	komiEntry.Validator = func(s string) error {
+		if _, err := strconv.ParseFloat(s, 64); err != nil {
+			return fmt.Errorf("invalid komi value")
+		}
+		return nil
+	}
+	formItems := []*widget.FormItem{
+		widget.NewFormItem("Komi", komiEntry),
+	}
+	komiDialog := dialog.NewForm("Set Komi", "OK", "Cancel", formItems, func(ok bool) {
+		if ok {
+			komiValue, err := strconv.ParseFloat(komiEntry.Text, 64)
+			if err != nil {
+				dialog.ShowError(fmt.Errorf("invalid komi value"), g.window)
+				return
+			}
+			g.komi = komiValue
+
+			// If engine is attached, send komi command
+			if g.gtpCmd != nil {
+				_, err := g.sendGTPCommand(fmt.Sprintf("komi %.1f", g.komi))
+				if err != nil {
+					dialog.ShowError(err, g.window)
+				}
+			}
+
+			// Recalculate and display score if in scoring mode
+			if g.mouseMode == "score" {
+				g.calculateAndDisplayScore()
+			}
+		}
+	}, g.window)
+	komiDialog.Show()
+}
+
+func (g *Game) showEngineSettings() {
+	// Create input entries for settings
+	gtpPathEntry := widget.NewEntry()
+	gtpPathEntry.SetText(g.gtpPath)
+	gtpArgsEntry := widget.NewEntry()
+	gtpArgsEntry.SetText(g.gtpArgs)
+	gtpColorEntry := widget.NewSelect([]string{"B", "W"}, func(value string) {})
+	gtpColorEntry.SetSelected(g.gtpColor)
+
+	// Create form items
+	formItems := []*widget.FormItem{
+		widget.NewFormItem("GTP Path", gtpPathEntry),
+		widget.NewFormItem("GTP Arguments", gtpArgsEntry),
+		widget.NewFormItem("GTP Color", gtpColorEntry),
+	}
+
+	// Show settings dialog
+	settingsDialog := dialog.NewForm("Engine Settings", "OK", "Cancel", formItems, func(ok bool) {
+		if ok {
+			g.gtpPath = gtpPathEntry.Text
+			g.gtpArgs = gtpArgsEntry.Text
+			g.gtpColor = gtpColorEntry.Selected
+		}
+	}, g.window)
+	settingsDialog.Show()
+}
+
+func (g *Game) attachEngine() {
+	// Start the GTP engine process
+	args := strings.Fields(g.gtpArgs)
+	g.gtpCmd = exec.Command(g.gtpPath, args...)
+
+	var err error
+	g.gtpIn, err = g.gtpCmd.StdinPipe()
+	if err != nil {
+		dialog.ShowError(err, g.window)
+		return
+	}
+
+	g.gtpOut, err = g.gtpCmd.StdoutPipe()
+	if err != nil {
+		dialog.ShowError(err, g.window)
+		return
+	}
+
+	if err := g.gtpCmd.Start(); err != nil {
+		dialog.ShowError(err, g.window)
+		return
+	}
+
+	g.gtpReader = bufio.NewReader(g.gtpOut)
+
+	// Initialize the engine
+	if err := g.initializeEngine(); err != nil {
+		dialog.ShowError(err, g.window)
+		g.detachEngine()
+	} else {
+		dialog.ShowInformation("Engine Attached", "Successfully attached to the engine.", g.window)
+	}
+}
+
+func (g *Game) detachEngine() {
+	if g.gtpCmd != nil {
+		// Kill the engine process
+		err := g.gtpCmd.Process.Kill()
+		if err != nil {
+			dialog.ShowError(fmt.Errorf("failed to kill engine process: %v", err), g.window)
+		}
+
+		// Close stdin pipe
+		if g.gtpIn != nil {
+			err := g.gtpIn.Close()
+			if err != nil {
+				dialog.ShowError(fmt.Errorf("failed to close engine stdin: %v", err), g.window)
+			}
+			g.gtpIn = nil
+		}
+
+		// Close stdout pipe
+		if g.gtpOut != nil {
+			err := g.gtpOut.Close()
+			if err != nil {
+				dialog.ShowError(fmt.Errorf("failed to close engine stdout: %v", err), g.window)
+			}
+			g.gtpOut = nil
+		}
+
+		// Wait for the process to exit
+		err = g.gtpCmd.Wait()
+		if err != nil && !strings.Contains(err.Error(), "killed") {
+			dialog.ShowError(fmt.Errorf("error while waiting for engine process to exit: %v", err), g.window)
+		}
+
+		// Set engine-related variables to nil
+		g.gtpCmd = nil
+		g.gtpReader = nil
+
+		dialog.ShowInformation("Engine Detached", "Successfully detached from the engine.", g.window)
+	}
+}
+
+func (g *Game) initializeEngine() error {
+	// Check if the required commands are supported
+	supportedCommands, err := g.sendGTPCommand("list_commands")
+	if err != nil {
+		return err
+	}
+
+	requiredCommands := []string{"boardsize", "komi", "play", "genmove"}
+	for _, cmd := range requiredCommands {
+		if !strings.Contains(supportedCommands, cmd) {
+			return fmt.Errorf("engine does not support required command: %s", cmd)
+		}
+	}
+
+	// Set board size
+	if g.sizeX == g.sizeY {
+		if _, err := g.sendGTPCommand(fmt.Sprintf("boardsize %d", g.sizeX)); err != nil {
+			return err
+		}
+	} else {
+		// Check if rectangular_boardsize is supported
+		if strings.Contains(supportedCommands, "rectangular_boardsize") {
+			if _, err := g.sendGTPCommand(fmt.Sprintf("rectangular_boardsize %d %d", g.sizeX, g.sizeY)); err != nil {
+				return err
+			}
+		} else {
+			return fmt.Errorf("engine does not support rectangular boards and board is not square")
+		}
+	}
+
+	// Set komi
+	if _, err := g.sendGTPCommand(fmt.Sprintf("komi %.1f", g.komi)); err != nil {
+		return err
+	}
+
+	// Send the current board state to the engine
+	for y := 0; y < g.sizeY; y++ {
+		for x := 0; x < g.sizeX; x++ {
+			stone := g.currentNode.boardState[y][x]
+			if stone != empty {
+				coord := g.clientToGTPCoords(x, y)
+				if _, err := g.sendGTPCommand(fmt.Sprintf("play %s %s", stone, coord)); err != nil {
+					return err
+				}
+			}
+		}
+	}
+
+	return nil
+}
+
+func (g *Game) sendGTPCommand(command string) (string, error) {
+	if g.gtpIn == nil || g.gtpReader == nil {
+		return "", fmt.Errorf("engine is not attached")
+	}
+
+	// Send command
+	_, err := g.gtpIn.Write([]byte(command + "\n"))
+	if err != nil {
+		return "", err
+	}
+
+	// Read response
+	var responseLines []string
+	for {
+		line, err := g.gtpReader.ReadString('\n')
+		if err != nil {
+			return "", err
+		}
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if line[0] == '=' || line[0] == '?' {
+			// Response start
+			if len(line) > 1 {
+				responseLines = append(responseLines, strings.TrimSpace(line[1:]))
+			}
+			// Read any additional output lines
+			for {
+				nextLine, err := g.gtpReader.ReadString('\n')
+				if err != nil {
+					return "", err
+				}
+				nextLine = strings.TrimSpace(nextLine)
+				if nextLine == "" {
+					break
+				}
+				responseLines = append(responseLines, nextLine)
+			}
+			if line[0] == '?' {
+				return strings.Join(responseLines, "\n"), fmt.Errorf("error from engine: %s", strings.Join(responseLines, "\n"))
+			}
+			return strings.Join(responseLines, "\n"), nil
+		}
+	}
+}
+
+// GTP coordinates use letters A-H, J-T (I is skipped), and numbers from 1 upwards
+func (g *Game) clientToGTPCoords(x, y int) string {
+	// Convert x to letter
+	letterRunes := []rune("ABCDEFGHJKLMNOPQRSTUVWXYZ")
+	if x < 0 || x >= len(letterRunes) {
+		return ""
+	}
+	letter := string(letterRunes[x])
+	// GTP coordinates have origin at lower-left corner
+	number := g.sizeY - y
+	return fmt.Sprintf("%s%d", letter, number)
+}
+
+func (g *Game) gtpToClientCoords(coord string) (int, int, error) {
+	if len(coord) < 2 {
+		return 0, 0, fmt.Errorf("invalid GTP coordinate: %s", coord)
+	}
+	letter := coord[:1]
+	numberStr := coord[1:]
+	letterRunes := []rune("ABCDEFGHJKLMNOPQRSTUVWXYZ")
+	x := -1
+	for i, r := range letterRunes {
+		if string(r) == letter {
+			x = i
+			break
+		}
+	}
+	if x == -1 {
+		return 0, 0, fmt.Errorf("invalid GTP coordinate letter: %s", letter)
+	}
+	number, err := strconv.Atoi(numberStr)
+	if err != nil {
+		return 0, 0, err
+	}
+	y := g.sizeY - number
+	if y < 0 || y >= g.sizeY {
+		return 0, 0, fmt.Errorf("invalid GTP coordinate number: %s", numberStr)
+	}
+	return x, y, nil
+}
+
+func (g *Game) handleEngineMove(coord string) {
+	coord = strings.TrimSpace(coord)
+	if coord == "resign" {
+		dialog.ShowInformation("Engine Resigned", "The engine has resigned.", g.window)
+		return
+	}
+	x, y, err := g.gtpToClientCoords(coord)
+	if err != nil {
+		dialog.ShowError(err, g.window)
+		return
+	}
+	player := switchPlayer(g.currentNode.player)
+	if !g.isMoveLegal(x, y, player) {
+		dialog.ShowError(fmt.Errorf("engine played an illegal move"), g.window)
+		return
+	}
+	boardCopy := copyBoard(g.currentNode.boardState)
+	boardCopy[y][x] = player
+	koX, koY := g.captureStones(boardCopy, x, y, player)
+	newNode := g.newGameTreeNode()
+	newNode.boardState = boardCopy
+	newNode.move = [2]int{x, y}
+	newNode.player = player
+	newNode.parent = g.currentNode
+	newNode.koX = koX
+	newNode.koY = koY
+	g.currentNode.children = append(g.currentNode.children, newNode)
+	g.currentNode = newNode
+	g.updateCommentTextbox()
+	g.updateGameTreeUI()
+	g.redrawBoard()
 }
 
 func (g *Game) updateCommentTextbox() {
@@ -532,25 +874,29 @@ func (g *Game) assignTerritoryToEmptyRegions() {
 	}
 }
 
-func (g *Game) calculateScore() (int, int) {
-	blackScore := 0
-	whiteScore := 0
+func (g *Game) calculateScore() (float64, float64) {
+	blackScore := 0.0
+	whiteScore := 0.0
 	for y := 0; y < g.sizeY; y++ {
 		for x := 0; x < g.sizeX; x++ {
 			owner := g.territoryMap[y][x]
 			if owner == black {
-				blackScore++
+				blackScore += 1.0
 			} else if owner == white {
-				whiteScore++
+				whiteScore += 1.0
 			}
 		}
 	}
+
+	// Add komi to white's score
+	whiteScore += g.komi
+
 	return blackScore, whiteScore
 }
 
 func (g *Game) calculateAndDisplayScore() {
 	blackScore, whiteScore := g.calculateScore()
-	g.scoringStatus.SetText(fmt.Sprintf("Black: %d, White: %d", blackScore, whiteScore))
+	g.scoringStatus.SetText(fmt.Sprintf("Black: %.1f, White: %.1f", blackScore, whiteScore))
 }
 
 func (g *Game) toggleGroupStatus(x, y int) {
@@ -1171,6 +1517,23 @@ func (g *Game) handleMouseClick(ev *fyne.PointEvent) {
 		g.updateCommentTextbox()
 		g.updateGameTreeUI()
 		g.redrawBoard()
+		if g.gtpCmd != nil && g.gtpColor != player {
+			// Send move to engine
+			coord := g.clientToGTPCoords(x, y)
+			if _, err := g.sendGTPCommand(fmt.Sprintf("play %s %s", player, coord)); err != nil {
+				dialog.ShowError(err, g.window)
+				g.detachEngine()
+			} else {
+				// Get engine's response move
+				engineMove, err := g.sendGTPCommand(fmt.Sprintf("genmove %s", switchPlayer(player)))
+				if err != nil {
+					dialog.ShowError(err, g.window)
+					g.detachEngine()
+				} else {
+					g.handleEngineMove(engineMove)
+				}
+			}
+		}
 	case "score":
 		g.toggleGroupStatus(x, y)
 		g.assignTerritoryToEmptyRegions()
@@ -2436,5 +2799,25 @@ func (g *Game) handlePass() {
 	g.redrawBoard()
 	if g.mouseMode == "score" {
 		g.exitScoringMode()
+	}
+	if g.gtpCmd != nil {
+		player := newNode.player
+		if _, err := g.sendGTPCommand(fmt.Sprintf("play %s pass", player)); err != nil {
+			dialog.ShowError(err, g.window)
+			g.detachEngine()
+		} else {
+			// Get engine's response move
+			engineMove, err := g.sendGTPCommand(fmt.Sprintf("genmove %s", switchPlayer(player)))
+			if err != nil {
+				dialog.ShowError(err, g.window)
+				g.detachEngine()
+			} else {
+				if engineMove == "pass" {
+					dialog.ShowInformation("Game Over", "Both players passed.", g.window)
+				} else {
+					g.handleEngineMove(engineMove)
+				}
+			}
+		}
 	}
 }
