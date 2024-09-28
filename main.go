@@ -846,6 +846,7 @@ func (g *Game) sendGTPCommand(command string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	fmt.Println("GTP command sent:\n" + command)
 
 	// Read response
 	var responseLines []string
@@ -875,10 +876,12 @@ func (g *Game) sendGTPCommand(command string) (string, error) {
 				}
 				responseLines = append(responseLines, nextLine)
 			}
+			response := strings.Join(responseLines, "\n")
+			fmt.Println("GTP response recieved:\n" + response)
 			if line[0] == '?' {
-				return strings.Join(responseLines, "\n"), fmt.Errorf("error from engine: %s", strings.Join(responseLines, "\n"))
+				return response, fmt.Errorf("error from engine: %s", strings.Join(responseLines, "\n"))
 			}
-			return strings.Join(responseLines, "\n"), nil
+			return response, nil
 		}
 	}
 }
@@ -937,7 +940,7 @@ func (g *Game) handleEngineMove(coord string) {
 	}
 	player := switchPlayer(g.currentNode.player)
 	if !g.isMoveLegal(x, y, player) {
-		g.showError(fmt.Errorf("engine played an illegal move"))
+		g.showError(fmt.Errorf("engine played an illegal move %d, %d", x, y))
 		return
 	}
 	boardCopy := copyBoard(g.currentNode.boardState)
@@ -1680,7 +1683,7 @@ func (g *Game) handleMouseMove(ev *desktop.MouseEvent) {
 
 	player := switchPlayer(g.currentNode.player)
 
-	if g.currentNode.boardState[y][x] != empty || !g.isMoveLegal(x, y, player) {
+	if !g.isMoveLegal(x, y, player) {
 		if g.hoverStone != nil {
 			g.gridContainer.Remove(g.hoverStone)
 			g.hoverStone = nil
@@ -1771,7 +1774,7 @@ func (g *Game) handleMouseClick(ev *fyne.PointEvent) {
 
 		// Engine interaction
 		if g.gtpCmd != nil {
-			player := switchPlayer(g.currentNode.player)
+			player := g.currentNode.player
 			if g.gtpColor != player {
 				// Send move to engine
 				coord := g.clientToGTPCoords(x, y)
@@ -1858,7 +1861,7 @@ func (g *Game) handleMouseClick(ev *fyne.PointEvent) {
 }
 
 func (g *Game) isMoveLegal(x, y int, player string) bool {
-	if x == g.currentNode.koX && y == g.currentNode.koY {
+	if (x == g.currentNode.koX && y == g.currentNode.koY) || g.currentNode.boardState[y][x] != empty {
 		return false
 	}
 
@@ -3061,16 +3064,14 @@ func (g *Game) handlePass() {
 		g.exitScoringMode()
 	}
 	if g.gtpCmd != nil {
-		player := g.currentNode.player
-		if g.gtpColor != player {
+		player := switchPlayer(g.currentNode.player)
+		// Generate engine moves if needed
+		if g.gtpColor == player {
 			if _, err := g.sendGTPCommand(fmt.Sprintf("play %s pass", player)); err != nil {
 				g.showError(err)
 				g.detachEngine()
 			}
-		}
-		// Generate engine moves if needed
-		if g.gtpColor == switchPlayer(player) {
-			engineMove, err := g.sendGTPCommand(fmt.Sprintf("genmove %s", switchPlayer(player)))
+			engineMove, err := g.sendGTPCommand(fmt.Sprintf("genmove %s", player))
 			if err != nil {
 				g.showError(err)
 				g.detachEngine()
