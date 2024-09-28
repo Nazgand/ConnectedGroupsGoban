@@ -2205,224 +2205,156 @@ func convertCoordinatesToSGF(x, y int) string {
 	return sgfX + sgfY
 }
 
-func generateSGF(node *GameTreeNode, sizeX, sizeY int) string {
-	sgf := "(" // Start of variation
+// Helper function to format SGF properties for a node
+func formatNodeProperties(node *GameTreeNode, isRoot bool, sizeX, sizeY int) string {
+	sgf := ";"
 
-	if node.parent == nil {
-		// Root node properties
-		sgf += ";"                                              // Start the root node
+	// Add root properties if the node is the root
+	if isRoot {
 		sgf += "FF[4]"                                          // File format version
 		sgf += "GM[1]"                                          // Game type (1 = Go)
 		sgf += "CA[UTF-8]"                                      // Unicode format
 		sgf += "AP[ConnectedGroupsGobanVersion" + version + "]" // Application name
-
 		// Adjust the board size property for rectangular boards
 		if sizeX == sizeY {
 			sgf += fmt.Sprintf("SZ[%d]", sizeX)
 		} else {
 			sgf += fmt.Sprintf("SZ[%d:%d]", sizeX, sizeY)
 		}
+	}
 
-		// Add initial stones to SGF
-		blackStonesText := "AB"
-		for y, arr := range node.addedBlackStones {
-			for x, el := range arr {
-				if el {
-					blackStonesText += "[" + convertCoordinatesToSGF(x, y) + "]"
-				}
+	// Handle move properties
+	if !isRoot && node.move[0] >= 0 && node.move[0] < sizeX && node.move[1] >= 0 && node.move[1] < sizeY {
+		if node.parent != nil && node.parent.player == black {
+			sgf += "B"
+		} else {
+			sgf += "W"
+		}
+		coords := convertCoordinatesToSGF(node.move[0], node.move[1])
+		sgf += fmt.Sprintf("[%s]", coords)
+	}
+
+	// Include comments if present
+	if node.Comment != "" {
+		escapedComment := strings.ReplaceAll(node.Comment, "\\", "\\\\")
+		escapedComment = strings.ReplaceAll(escapedComment, "]", "\\]")
+		sgf += fmt.Sprintf("C[%s]", escapedComment)
+	}
+
+	// Include annotations (CR, SQ, TR, MA) if present
+	sgf += formatAnnotations(node)
+
+	// Include added stones
+	sgf += formatAddedStones(node)
+
+	return sgf
+}
+
+// Formats annotations (CR, SQ, TR, MA) for a node
+func formatAnnotations(node *GameTreeNode) string {
+	annotations := ""
+
+	circleText := "CR"
+	for y, arr := range node.CR {
+		for x, el := range arr {
+			if el {
+				circleText += "[" + convertCoordinatesToSGF(x, y) + "]"
 			}
-		}
-		if blackStonesText != "AB" {
-			sgf += blackStonesText
-		}
-
-		whiteStonesText := "AW"
-		for y, arr := range node.addedWhiteStones {
-			for x, el := range arr {
-				if el {
-					whiteStonesText += "[" + convertCoordinatesToSGF(x, y) + "]"
-				}
-			}
-		}
-		if whiteStonesText != "AW" {
-			sgf += whiteStonesText
-		}
-
-		// Include comment if present
-		if node.Comment != "" {
-			// Escape ']' and '\' characters in comments
-			escapedComment := strings.ReplaceAll(node.Comment, "\\", "\\\\")
-			escapedComment = strings.ReplaceAll(escapedComment, "]", "\\]")
-			sgf += fmt.Sprintf("C[%s]", escapedComment)
-		}
-
-		// Include CR, SQ, TR, MA, LB properties if present
-		circleText := "CR"
-		for y, arr := range node.CR {
-			for x, el := range arr {
-				if el {
-					circleText += "[" + convertCoordinatesToSGF(x, y) + "]"
-				}
-			}
-		}
-		if circleText != "CR" {
-			sgf += circleText
-		}
-
-		squareText := "SQ"
-		for y, arr := range node.SQ {
-			for x, el := range arr {
-				if el {
-					squareText += "[" + convertCoordinatesToSGF(x, y) + "]"
-				}
-			}
-		}
-		if squareText != "SQ" {
-			sgf += squareText
-		}
-
-		triangleText := "TR"
-		for y, arr := range node.TR {
-			for x, el := range arr {
-				if el {
-					triangleText += "[" + convertCoordinatesToSGF(x, y) + "]"
-				}
-			}
-		}
-		if triangleText != "TR" {
-			sgf += triangleText
-		}
-
-		xMarkText := "MA"
-		for y, arr := range node.MA {
-			for x, el := range arr {
-				if el {
-					xMarkText += "[" + convertCoordinatesToSGF(x, y) + "]"
-				}
-			}
-		}
-		if xMarkText != "MA" {
-			sgf += xMarkText
-		}
-
-		if len(node.LB) > 0 {
-			sgf += "LB"
-			for point, label := range node.LB {
-				sgf += fmt.Sprintf("[%s:%s]", point, label)
-			}
-		}
-
-	} else {
-		sgf += ";" // Start a new node
-
-		// Add move properties only if the node has a valid move
-		if node.move[0] >= 0 && node.move[0] < sizeX && node.move[1] >= 0 && node.move[1] < sizeY {
-			if node.parent.player == black {
-				sgf += "B"
-			} else {
-				sgf += "W"
-			}
-			coords := convertCoordinatesToSGF(node.move[0], node.move[1])
-			sgf += fmt.Sprintf("[%s]", coords)
-		}
-
-		// Include comment if present
-		if node.Comment != "" {
-			// Escape ']' and '\' characters in comments
-			escapedComment := strings.ReplaceAll(node.Comment, "\\", "\\\\")
-			escapedComment = strings.ReplaceAll(escapedComment, "]", "\\]")
-			sgf += fmt.Sprintf("C[%s]", escapedComment)
-		}
-
-		// Include CR, SQ, TR, MA, LB properties if present
-		circleText := "CR"
-		for y, arr := range node.CR {
-			for x, el := range arr {
-				if el {
-					circleText += "[" + convertCoordinatesToSGF(x, y) + "]"
-				}
-			}
-		}
-		if circleText != "CR" {
-			sgf += circleText
-		}
-
-		squareText := "SQ"
-		for y, arr := range node.SQ {
-			for x, el := range arr {
-				if el {
-					squareText += "[" + convertCoordinatesToSGF(x, y) + "]"
-				}
-			}
-		}
-		if squareText != "SQ" {
-			sgf += squareText
-		}
-
-		triangleText := "TR"
-		for y, arr := range node.TR {
-			for x, el := range arr {
-				if el {
-					triangleText += "[" + convertCoordinatesToSGF(x, y) + "]"
-				}
-			}
-		}
-		if triangleText != "TR" {
-			sgf += triangleText
-		}
-
-		xMarkText := "MA"
-		for y, arr := range node.MA {
-			for x, el := range arr {
-				if el {
-					xMarkText += "[" + convertCoordinatesToSGF(x, y) + "]"
-				}
-			}
-		}
-		if xMarkText != "MA" {
-			sgf += xMarkText
-		}
-
-		if len(node.LB) > 0 {
-			sgf += "LB"
-			for point, label := range node.LB {
-				sgf += fmt.Sprintf("[%s:%s]", point, label)
-			}
-		}
-
-		// Handle added stones (AB and AW) within the same node
-		blackStonesText := "AB"
-		for y, arr := range node.addedBlackStones {
-			for x, el := range arr {
-				if el {
-					blackStonesText += "[" + convertCoordinatesToSGF(x, y) + "]"
-				}
-			}
-		}
-		if blackStonesText != "AB" {
-			sgf += blackStonesText
-		}
-
-		whiteStonesText := "AW"
-		for y, arr := range node.addedWhiteStones {
-			for x, el := range arr {
-				if el {
-					whiteStonesText += "[" + convertCoordinatesToSGF(x, y) + "]"
-				}
-			}
-		}
-		if whiteStonesText != "AW" {
-			sgf += whiteStonesText
 		}
 	}
+	if circleText != "CR" {
+		annotations += circleText
+	}
+
+	squareText := "SQ"
+	for y, arr := range node.SQ {
+		for x, el := range arr {
+			if el {
+				squareText += "[" + convertCoordinatesToSGF(x, y) + "]"
+			}
+		}
+	}
+	if squareText != "SQ" {
+		annotations += squareText
+	}
+
+	triangleText := "TR"
+	for y, arr := range node.TR {
+		for x, el := range arr {
+			if el {
+				triangleText += "[" + convertCoordinatesToSGF(x, y) + "]"
+			}
+		}
+	}
+	if triangleText != "TR" {
+		annotations += triangleText
+	}
+
+	xMarkText := "MA"
+	for y, arr := range node.MA {
+		for x, el := range arr {
+			if el {
+				xMarkText += "[" + convertCoordinatesToSGF(x, y) + "]"
+			}
+		}
+	}
+	if xMarkText != "MA" {
+		annotations += xMarkText
+	}
+
+	if len(node.LB) > 0 {
+		annotations += "LB"
+		for point, label := range node.LB {
+			annotations += fmt.Sprintf("[%s:%s]", point, label)
+		}
+	}
+
+	return annotations
+}
+
+// Formats added black and white stones for a node
+func formatAddedStones(node *GameTreeNode) string {
+	addedStones := ""
+
+	blackStonesText := "AB"
+	for y, arr := range node.addedBlackStones {
+		for x, el := range arr {
+			if el {
+				blackStonesText += "[" + convertCoordinatesToSGF(x, y) + "]"
+			}
+		}
+	}
+	if blackStonesText != "AB" {
+		addedStones += blackStonesText
+	}
+
+	whiteStonesText := "AW"
+	for y, arr := range node.addedWhiteStones {
+		for x, el := range arr {
+			if el {
+				whiteStonesText += "[" + convertCoordinatesToSGF(x, y) + "]"
+			}
+		}
+	}
+	if whiteStonesText != "AW" {
+		addedStones += whiteStonesText
+	}
+
+	return addedStones
+}
+
+func generateSGF(node *GameTreeNode, sizeX, sizeY int) string {
+	sgf := "(" // Start of variation
+
+	// Add the properties for the current node
+	sgf += formatNodeProperties(node, node.parent == nil, sizeX, sizeY)
 
 	// Recursively generate SGF for child nodes (variations)
 	if len(node.children) > 0 {
 		if len(node.children) == 1 {
 			// Continue the main line without starting a new variation
 			childSGF := generateSGF(node.children[0], sizeX, sizeY)
-			// Remove outer parentheses to nest within the current variation
-			childSGF = childSGF[1 : len(childSGF)-1]
+			childSGF = childSGF[1 : len(childSGF)-1] // Remove outer parentheses to nest within the current variation
 			sgf += childSGF
 		} else {
 			// Multiple variations; each variation is enclosed in parentheses
