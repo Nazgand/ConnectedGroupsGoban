@@ -554,6 +554,37 @@ func (g *Game) showEngineSettings() {
 	settingsDialog.Show()
 }
 
+func (g *Game) updateEngineBoardState() error {
+	if g.gtpCmd == nil {
+		return fmt.Errorf("engine is not attached")
+	}
+
+	// Send "clear_board" to reset the engine's board
+	if _, err := g.sendGTPCommand("clear_board"); err != nil {
+		return err
+	}
+
+	// Set komi in case it has changed
+	if _, err := g.sendGTPCommand(fmt.Sprintf("komi %.1f", g.komi)); err != nil {
+		return err
+	}
+
+	// Send "play" commands for each stone on the current board
+	for y := 0; y < g.sizeY; y++ {
+		for x := 0; x < g.sizeX; x++ {
+			stone := g.currentNode.boardState[y][x]
+			if stone != empty {
+				coord := g.clientToGTPCoords(x, y)
+				if _, err := g.sendGTPCommand(fmt.Sprintf("play %s %s", stone, coord)); err != nil {
+					return err
+				}
+			}
+		}
+	}
+
+	return nil
+}
+
 func (g *Game) attachEngine() {
 	// Start the GTP engine process
 	args := strings.Fields(g.gtpArgs)
@@ -999,13 +1030,19 @@ func (g *Game) buildGameTreeUI(node *GameTreeNode) fyne.CanvasObject {
 	}
 
 	nodeButton := widget.NewButton(nodeLabel, func() {
-		if g.mouseMode == "score" {
-			g.exitScoringMode()
-		}
-
+		nodeChanged := node != g.currentNode
+		g.setMouseMode("play")
 		g.setCurrentNode(node)
 		g.redrawBoard()
 		g.updateGameTreeUI()
+		if nodeChanged && g.gtpCmd != nil {
+			// Update engine board state
+			err := g.updateEngineBoardState()
+			if err != nil {
+				dialog.ShowError(err, g.window)
+				g.detachEngine()
+			}
+		}
 	})
 
 	if node == g.currentNode {
@@ -1529,21 +1566,39 @@ func (g *Game) handleMouseClick(ev *fyne.PointEvent) {
 		if !g.isMoveLegal(x, y, player) {
 			return
 		}
-		boardCopy := copyBoard(g.currentNode.boardState)
-		boardCopy[y][x] = player
-		koX, koY := g.captureStones(boardCopy, x, y, player)
-		newNode := g.newGameTreeNode()
-		newNode.boardState = boardCopy
-		newNode.move = [2]int{x, y}
-		newNode.player = player
-		newNode.parent = g.currentNode
-		newNode.koX = koX
-		newNode.koY = koY
-		g.currentNode.children = append(g.currentNode.children, newNode)
-		g.currentNode = newNode
+
+		// Check if any child of the current node has this move
+		moveExists := false
+		for _, child := range g.currentNode.children {
+			if child.move[0] == x && child.move[1] == y && child.player == player {
+				// Move already exists, switch to that node
+				g.currentNode = child
+				moveExists = true
+				break
+			}
+		}
+
+		if !moveExists {
+			// Create new node
+			boardCopy := copyBoard(g.currentNode.boardState)
+			boardCopy[y][x] = player
+			koX, koY := g.captureStones(boardCopy, x, y, player)
+			newNode := g.newGameTreeNode()
+			newNode.boardState = boardCopy
+			newNode.move = [2]int{x, y}
+			newNode.player = player
+			newNode.parent = g.currentNode
+			newNode.koX = koX
+			newNode.koY = koY
+			g.currentNode.children = append(g.currentNode.children, newNode)
+			g.currentNode = newNode
+		}
+
 		g.updateCommentTextbox()
 		g.updateGameTreeUI()
 		g.redrawBoard()
+
+		// Engine interaction
 		if g.gtpCmd != nil && g.gtpColor != player {
 			// Send move to engine
 			coord := g.clientToGTPCoords(x, y)

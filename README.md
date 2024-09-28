@@ -5,7 +5,7 @@ A Weiqi Goban written in Golang and Fyne
 
 # Features
 
-Rectangular boards
+Rectangular boards up to 52x52
 
 Game tree
 
