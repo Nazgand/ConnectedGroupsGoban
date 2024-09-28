@@ -964,7 +964,7 @@ func (g *Game) buildGameTreeUI(node *GameTreeNode) fyne.CanvasObject {
 	if node.parent == nil {
 		nodeLabel = "Root"
 	} else if node.hasAddedBlackStones() || node.hasAddedWhiteStones() {
-		// ... existing code for added stones ...
+		nodeLabel = fmt.Sprintf("%s:Setup", node.player)
 	} else if node.move[0] == -1 && node.move[1] == -1 {
 		nodeLabel = fmt.Sprintf("%s:Pass", node.player)
 	} else {
