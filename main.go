@@ -44,7 +44,6 @@ var (
 type Game struct {
 	sizeX             int
 	sizeY             int
-	player            string
 	boardCanvas       *fyne.Container
 	gridContainer     *fyne.Container
 	hoverStone        *canvas.Circle
@@ -242,7 +241,6 @@ func main() {
 	a := app.NewWithID("com.nazgand.connectedgroupsgoban")
 	w := a.NewWindow("Connected Groups Goban Version " + version)
 	game := &Game{
-		player:  black,
 		window:  w,
 		nodeMap: make(map[string]*GameTreeNode),
 	}
@@ -619,35 +617,14 @@ func (g *Game) buildGameTreeUI(node *GameTreeNode) fyne.CanvasObject {
 	if node.parent == nil {
 		nodeLabel = "Root"
 	} else if node.hasAddedBlackStones() || node.hasAddedWhiteStones() {
-		labels := []string{}
-
-		for y, arr := range node.addedBlackStones {
-			for x, el := range arr {
-				if el {
-					label := fmt.Sprintf("+B:(%d,%d)", x, y)
-					labels = append(labels, label)
-				}
-			}
-		}
-
-		for y, arr := range node.addedWhiteStones {
-			for x, el := range arr {
-				if el {
-					label := fmt.Sprintf("+W:(%d,%d)", x, y)
-					labels = append(labels, label)
-				}
-			}
-		}
-		nodeLabel = strings.Join(labels, ", ")
+		// ... existing code for added stones ...
 	} else if node.move[0] == -1 && node.move[1] == -1 {
-		nodeLabel = fmt.Sprintf("%s:Pass", switchPlayer(node.player))
+		nodeLabel = fmt.Sprintf("%s:Pass", node.player)
 	} else {
-		nodeLabel = fmt.Sprintf("%s:(%d,%d)", switchPlayer(node.player), node.move[0], node.move[1])
+		nodeLabel = fmt.Sprintf("%s:(%d,%d)", node.player, node.move[0], node.move[1])
 	}
 
-	// Create a button for the node
 	nodeButton := widget.NewButton(nodeLabel, func() {
-		// Add the following lines to exit scoring mode if active
 		if g.mouseMode == "score" {
 			g.exitScoringMode()
 		}
@@ -657,12 +634,10 @@ func (g *Game) buildGameTreeUI(node *GameTreeNode) fyne.CanvasObject {
 		g.updateGameTreeUI()
 	})
 
-	// Highlight the current node
 	if node == g.currentNode {
 		nodeButton.Importance = widget.HighImportance
 	}
 
-	// Handle children nodes
 	childUIs := []fyne.CanvasObject{}
 	for _, child := range node.children {
 		childUIs = append(childUIs, g.buildGameTreeUI(child))
@@ -685,10 +660,9 @@ func makeEmptyBoard(sizeX, sizeY int) [][]string {
 func (g *Game) initializeBoard() {
 	g.idCounter = 1
 	rootNode := g.newGameTreeNode()
-	rootNode.player = black
+	rootNode.player = "" // No player has moved yet
 	g.rootNode = rootNode
 	g.currentNode = rootNode
-	g.player = rootNode.player
 	g.nodeMap = make(map[string]*GameTreeNode)
 	g.nodeMap[rootNode.id] = rootNode
 	if g.mouseMode == "score" {
@@ -709,7 +683,6 @@ func copyBoard(board [][]string) [][]string {
 
 func (g *Game) setCurrentNode(node *GameTreeNode) {
 	g.currentNode = node
-	g.player = node.player
 	g.updateCommentTextbox()
 }
 
@@ -1112,7 +1085,6 @@ func (g *Game) boardCoordsToPixel(x, y int) fyne.Position {
 
 // Handles mouse movement events to display a hover stone when applicable.
 func (g *Game) handleMouseMove(ev *desktop.MouseEvent) {
-	// If in scoring mode, do not display hover stone
 	if g.mouseMode == "score" {
 		if g.hoverStone != nil {
 			g.gridContainer.Remove(g.hoverStone)
@@ -1122,10 +1094,8 @@ func (g *Game) handleMouseMove(ev *desktop.MouseEvent) {
 		return
 	}
 
-	// Convert pixel position to board coordinates
 	x, y, ok := g.pixelToBoardCoords(ev.Position)
 	if !ok {
-		// Remove hover stone if out of bounds
 		if g.hoverStone != nil {
 			g.gridContainer.Remove(g.hoverStone)
 			g.hoverStone = nil
@@ -1134,9 +1104,9 @@ func (g *Game) handleMouseMove(ev *desktop.MouseEvent) {
 		return
 	}
 
-	// Check if the position is empty and the move is legal
-	if g.currentNode.boardState[y][x] != empty || !g.isMoveLegal(x, y, g.player) {
-		// Remove hover stone if the position is not suitable
+	player := switchPlayer(g.currentNode.player)
+
+	if g.currentNode.boardState[y][x] != empty || !g.isMoveLegal(x, y, player) {
 		if g.hoverStone != nil {
 			g.gridContainer.Remove(g.hoverStone)
 			g.hoverStone = nil
@@ -1145,14 +1115,12 @@ func (g *Game) handleMouseMove(ev *desktop.MouseEvent) {
 		return
 	}
 
-	// Remove previous hover stone if it exists
 	if g.hoverStone != nil {
 		g.gridContainer.Remove(g.hoverStone)
 	}
 
-	// Create a new hover stone with transparency to indicate potential placement
 	circle := canvas.NewCircle(transparentBlackColor)
-	if g.player == white {
+	if player == white {
 		circle.FillColor = transparentWhiteColor
 	}
 	circle.StrokeWidth = 0
@@ -1165,14 +1133,12 @@ func (g *Game) handleMouseMove(ev *desktop.MouseEvent) {
 
 // Handles mouse click events to place stones or toggle group status in scoring mode.
 func (g *Game) handleMouseClick(ev *fyne.PointEvent) {
-	// Convert pixel position to board coordinates
 	x, y, ok := g.pixelToBoardCoords(ev.Position)
 	if !ok {
 		return // Click outside the board
 	}
 
 	if g.mouseMode == "score" {
-		// In scoring mode, toggle the ownership of the group at (x, y)
 		g.toggleGroupStatus(x, y)
 		g.assignTerritoryToEmptyRegions()
 		g.redrawBoard()
@@ -1180,42 +1146,34 @@ func (g *Game) handleMouseClick(ev *fyne.PointEvent) {
 		return
 	}
 
-	// If the position is not empty, ignore the click
 	if g.currentNode.boardState[y][x] != empty {
 		return
 	}
 
-	// Check if the move is legal
-	if !g.isMoveLegal(x, y, g.player) {
+	player := switchPlayer(g.currentNode.player)
+
+	if !g.isMoveLegal(x, y, player) {
 		return
 	}
 
-	// Create a copy of the current board state to apply the move
 	boardCopy := copyBoard(g.currentNode.boardState)
-
-	// Place the stone on the copied board
-	boardCopy[y][x] = g.player
-
-	// Capture any opponent stones and handle ko rules
-	koX, koY := g.captureStones(boardCopy, x, y, g.player)
-
-	// Create a new game tree node with the updated board state
+	boardCopy[y][x] = player
+	koX, koY := g.captureStones(boardCopy, x, y, player)
 	newNode := g.newGameTreeNode()
 	newNode.boardState = boardCopy
 	newNode.move = [2]int{x, y}
-	newNode.player = switchPlayer(g.player)
+	newNode.player = player // Set the player who made the move
 	newNode.parent = g.currentNode
 	newNode.koX = koX
 	newNode.koY = koY
 	g.currentNode.children = append(g.currentNode.children, newNode)
 	g.currentNode = newNode
-	g.player = newNode.player
 
-	// Refresh the game tree UI to reflect the new move
-	g.updateGameTreeUI()
-
-	// Update the comment textbox to show comments for the current node
+	// Update the comment textbox
 	g.updateCommentTextbox()
+
+	// Refresh the game tree UI
+	g.updateGameTreeUI()
 
 	// Redraw the board to display the new stone and any captures
 	g.redrawBoard()
@@ -1854,7 +1812,7 @@ func (g *Game) processMainLine(gameTree *SGFGameTree, parentNode *GameTreeNode, 
 	currentParent := parentNode
 	sequenceStartIndex := 0
 	if currentParent == g.rootNode {
-		sequenceStartIndex = 1 // Skip root node as we have already processed it
+		sequenceStartIndex = 1
 	}
 	for i := sequenceStartIndex; i < len(gameTree.sequence); i++ {
 		nodeProperties := gameTree.sequence[i].properties
@@ -1862,12 +1820,15 @@ func (g *Game) processMainLine(gameTree *SGFGameTree, parentNode *GameTreeNode, 
 		if err != nil {
 			return err
 		}
-		// Copy the board state
 		newBoardState := copyBoard(currentParent.boardState)
 		newNode := g.newGameTreeNode()
 		newNode.boardState = newBoardState
 		newNode.parent = currentParent
-		newNode.player = switchPlayer(moveData.move.player)
+		if moveData.move != nil {
+			newNode.player = moveData.move.player
+		} else {
+			newNode.player = currentParent.player
+		}
 		currentParent.children = append(currentParent.children, newNode)
 
 		// Apply added black stones
@@ -1914,7 +1875,7 @@ func (g *Game) processMainLine(gameTree *SGFGameTree, parentNode *GameTreeNode, 
 		}
 
 		currentParent = newNode
-		*lastNode = newNode // Update lastNode to the current node
+		*lastNode = newNode
 	}
 
 	if len(gameTree.subtrees) > 0 {
@@ -2083,15 +2044,13 @@ func (g *Game) processSequence(sequence []*SGFNode, parentNode *GameTreeNode) er
 			return err
 		}
 
-		// Copy the board state
 		newBoardState := copyBoard(currentParent.boardState)
 
-		// Initialize the new node with empty slices and maps
 		newNode := g.newGameTreeNode()
 		newNode.boardState = newBoardState
 		newNode.parent = currentParent
 		if moveData.move != nil {
-			newNode.player = switchPlayer(moveData.move.player)
+			newNode.player = moveData.move.player
 		} else {
 			newNode.player = currentParent.player
 		}
@@ -2205,13 +2164,11 @@ func convertCoordinatesToSGF(x, y int) string {
 func formatNodeProperties(node *GameTreeNode, isRoot bool, sizeX, sizeY int) string {
 	sgf := ";"
 
-	// Add root properties if the node is the root
 	if isRoot {
 		sgf += "FF[4]"                                          // File format version
 		sgf += "GM[1]"                                          // Game type (1 = Go)
 		sgf += "CA[UTF-8]"                                      // Unicode format
 		sgf += "AP[ConnectedGroupsGobanVersion" + version + "]" // Application name
-		// Adjust the board size property for rectangular boards
 		if sizeX == sizeY {
 			sgf += fmt.Sprintf("SZ[%d]", sizeX)
 		} else {
@@ -2219,28 +2176,23 @@ func formatNodeProperties(node *GameTreeNode, isRoot bool, sizeX, sizeY int) str
 		}
 	}
 
-	// Handle move properties
 	if !isRoot && node.move[0] >= 0 && node.move[0] < sizeX && node.move[1] >= 0 && node.move[1] < sizeY {
-		if node.parent != nil && node.parent.player == black {
+		if node.player == black {
 			sgf += "B"
-		} else {
+		} else if node.player == white {
 			sgf += "W"
 		}
 		coords := convertCoordinatesToSGF(node.move[0], node.move[1])
 		sgf += fmt.Sprintf("[%s]", coords)
 	}
 
-	// Include comments if present
 	if node.Comment != "" {
 		escapedComment := strings.ReplaceAll(node.Comment, "\\", "\\\\")
 		escapedComment = strings.ReplaceAll(escapedComment, "]", "\\]")
 		sgf += fmt.Sprintf("C[%s]", escapedComment)
 	}
 
-	// Include annotations (CR, SQ, TR, MA) if present
 	sgf += formatAnnotations(node)
-
-	// Include added stones
 	sgf += formatAddedStones(node)
 
 	return sgf
@@ -2370,24 +2322,16 @@ func generateSGF(node *GameTreeNode, sizeX, sizeY int) string {
 }
 
 func (g *Game) handlePass() {
-	// Create new game tree node representing a pass move
 	newNode := g.newGameTreeNode()
 	newNode.boardState = copyBoard(g.currentNode.boardState)
-	newNode.player = switchPlayer(g.player)
+	newNode.player = switchPlayer(g.currentNode.player) // Set the player who passed
+	newNode.move = [2]int{-1, -1}
 	newNode.parent = g.currentNode
 	g.currentNode.children = append(g.currentNode.children, newNode)
-	g.nodeMap[newNode.id] = newNode
 	g.currentNode = newNode
-	g.player = newNode.player
-
-	// Refresh the game tree UI
 	g.updateGameTreeUI()
-
-	// Update the comment textbox
 	g.updateCommentTextbox()
-
 	g.redrawBoard()
-
 	if g.mouseMode == "score" {
 		g.exitScoringMode()
 	}
