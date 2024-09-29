@@ -1,4 +1,5 @@
 # ConnectedGroupsGoban
+
 A Weiqi Goban written in Golang and Fyne
 
 ![Screenshot](Screenshot_20240928_054610.png?raw=true "Screenshot")
