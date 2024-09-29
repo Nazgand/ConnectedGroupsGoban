@@ -624,12 +624,16 @@ func (g *Game) handleKeyEvent(event *fyne.KeyEvent) {
 				}
 			}
 		}
+	case fyne.KeyDelete:
+		g.deleteCurrentNode()
+	case fyne.KeyP:
+		g.handlePass()
 	}
 }
 
 func (g *Game) showSetKomiDialog() {
 	komiEntry := widget.NewEntry()
-	komiEntry.SetText(fmt.Sprintf("%.1f", g.komi))
+	komiEntry.SetText(fmt.Sprintf("%d", g.komi))
 	komiEntry.Validator = func(s string) error {
 		if _, err := strconv.ParseFloat(s, 64); err != nil {
 			return fmt.Errorf("invalid komi value")
@@ -655,7 +659,7 @@ func (g *Game) showSetKomiDialog() {
 
 			// If engine is attached, send komi command
 			if g.gtpCmd != nil {
-				_, err := g.sendGTPCommand(fmt.Sprintf("komi %.1f", g.komi))
+				_, err := g.sendGTPCommand(fmt.Sprintf("komi %d", g.komi))
 				if err != nil {
 					g.showError(err)
 				}
@@ -738,7 +742,7 @@ func (g *Game) updateEngineBoardState() error {
 	}
 
 	// Set komi in case it has changed
-	if _, err := g.sendGTPCommand(fmt.Sprintf("komi %.1f", g.komi)); err != nil {
+	if _, err := g.sendGTPCommand(fmt.Sprintf("komi %d", g.komi)); err != nil {
 		return err
 	}
 
@@ -921,7 +925,7 @@ func (g *Game) initializeEngine() error {
 	}
 
 	// Set komi
-	if _, err := g.sendGTPCommand(fmt.Sprintf("komi %.1f", g.komi)); err != nil {
+	if _, err := g.sendGTPCommand(fmt.Sprintf("komi %d", g.komi)); err != nil {
 		return err
 	}
 
@@ -1235,7 +1239,7 @@ func (g *Game) calculateScore() (int, int) {
 
 func (g *Game) calculateAndDisplayScore() {
 	blackScore, whiteScore := g.calculateScore()
-	g.scoringStatus.SetText(fmt.Sprintf("Black: %.1f, White: %.1f", blackScore, whiteScore))
+	g.scoringStatus.SetText(fmt.Sprintf("Black: %d, White: %d", blackScore, whiteScore))
 }
 
 func (g *Game) toggleGroupStatus(x, y int) {
@@ -3026,7 +3030,7 @@ func formatNodeProperties(node *GameTreeNode, isRoot bool, sizeX, sizeY int, kom
 		} else {
 			sgf += fmt.Sprintf("SZ[%d:%d]", sizeX, sizeY)
 		}
-		sgf += fmt.Sprintf("KM[%.1f]", komi) // Include komi
+		sgf += fmt.Sprintf("KM[%d]", komi) // Include komi
 	}
 
 	if !isRoot && node.move[0] >= 0 && node.move[0] < sizeX && node.move[1] >= 0 && node.move[1] < sizeY {
