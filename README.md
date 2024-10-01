@@ -27,3 +27,13 @@ GTP engine self play
 Integer komi support
 
 Highlights last move
+
+# Availability
+
+Linux
+
+Windows
+
+Adndroid
+
+Source code
