@@ -34,6 +34,6 @@ Linux
 
 Windows
 
-Adndroid
+Android
 
 Source code
